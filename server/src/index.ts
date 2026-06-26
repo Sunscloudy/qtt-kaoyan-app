@@ -19,6 +19,7 @@ function requireEnv(name: string) {
 }
 
 const jwtSecret = requireEnv('JWT_SECRET');
+const supervisorRegisterCode = process.env.SUPERVISOR_REGISTER_CODE || '260327';
 const clientUrls = (process.env.CLIENT_URL || '')
   .split(',')
   .map((url) => url.trim())
@@ -39,12 +40,12 @@ type Subject = 'english' | 'politics' | 'major1' | 'major2';
 type Priority = 'high' | 'medium' | 'low';
 type Role = 'student' | 'supervisor';
 type TaskStatus = 'not_started' | 'in_progress' | 'completed';
-type MessageType = 'encouragement' | 'reminder' | 'review';
+type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply';
 
 const subjects: Subject[] = ['english', 'politics', 'major1', 'major2'];
 const priorities: Priority[] = ['high', 'medium', 'low'];
 const taskStatuses: TaskStatus[] = ['not_started', 'in_progress', 'completed'];
-const messageTypes: MessageType[] = ['encouragement', 'reminder', 'review'];
+const messageTypes: MessageType[] = ['encouragement', 'reminder', 'review', 'reply'];
 
 const subjectLabels: Record<Subject, string> = {
   english: '英语',
@@ -93,7 +94,8 @@ const subjectBaseWeights: Record<Subject, number> = {
 const messageTypeLabels: Record<MessageType, string> = {
   encouragement: '鼓励',
   reminder: '提醒',
-  review: '复盘'
+  review: '复盘',
+  reply: '回复'
 };
 
 type AuthedRequest = Request & { userId?: number; userRole?: Role };
@@ -212,14 +214,19 @@ async function getProfilePayload(userId: number) {
 
 async function getMessagesForStudent(userId: number) {
   const messages = await prisma.message.findMany({
-    where: { receiverId: userId },
-    include: { sender: { select: { username: true } } },
+    where: { OR: [{ receiverId: userId }, { senderId: userId }] },
+    include: {
+      sender: { select: { id: true, username: true, nickname: true, role: true } },
+      receiver: { select: { id: true, username: true, nickname: true, role: true } }
+    },
     orderBy: { createdAt: 'desc' }
   });
   return messages.map((message) => ({
     ...message,
     typeLabel: messageTypeLabels[message.type as MessageType] || message.type,
-    senderName: message.sender.username
+    senderName: message.sender.nickname || message.sender.username,
+    receiverName: message.receiver.nickname || message.receiver.username,
+    senderRole: message.sender.role
   }));
 }
 
@@ -227,18 +234,24 @@ async function getSupervisorMessages(supervisorId: number, studentId?: number) {
   const student = await getBoundStudentForSupervisor(supervisorId, studentId);
   if (!student) return [];
   const messages = await prisma.message.findMany({
-    where: { receiverId: student.id, senderId: supervisorId },
+    where: {
+      OR: [
+        { senderId: supervisorId, receiverId: student.id },
+        { senderId: student.id, receiverId: supervisorId }
+      ]
+    },
     include: {
-      sender: { select: { username: true } },
-      receiver: { select: { username: true } }
+      sender: { select: { id: true, username: true, nickname: true, role: true } },
+      receiver: { select: { id: true, username: true, nickname: true, role: true } }
     },
     orderBy: { createdAt: 'desc' }
   });
   return messages.map((message) => ({
     ...message,
     typeLabel: messageTypeLabels[message.type as MessageType] || message.type,
-    senderName: message.sender.username,
-    receiverName: message.receiver.username
+    senderName: message.sender.nickname || message.sender.username,
+    receiverName: message.receiver.nickname || message.receiver.username,
+    senderRole: message.sender.role
   }));
 }
 
@@ -358,6 +371,32 @@ async function getBoundStudentForSupervisor(supervisorId: number, studentId?: nu
     orderBy: { createdAt: 'asc' }
   });
   return pair?.student ?? null;
+}
+
+async function getMessageThreadRoot(messageId: number) {
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: {
+      parent: true,
+      sender: { select: { id: true, role: true } },
+      receiver: { select: { id: true, role: true } }
+    }
+  });
+  if (!message) return null;
+  if (!message.parentId) return message;
+  const parent = await prisma.message.findUnique({
+    where: { id: message.parentId },
+    include: {
+      sender: { select: { id: true, role: true } },
+      receiver: { select: { id: true, role: true } }
+    }
+  });
+  return parent;
+}
+
+async function isSupervisorBoundToStudent(supervisorId: number, studentId: number) {
+  const pair = await prisma.studyPair.findFirst({ where: { supervisorId, studentId } });
+  return Boolean(pair);
 }
 
 function emptySupervisorDashboard(date = today()) {
@@ -496,12 +535,16 @@ app.post('/api/register', asyncHandler(async (req, res) => {
   const confirmPassword = String(req.body.confirmPassword || '');
   const nickname = String(req.body.nickname || '').trim();
   const role = req.body.role;
+  const supervisorCode = String(req.body.supervisorCode || '').trim();
 
   if (!username) return res.status(400).json({ message: '用户名不能为空' });
   if (!nickname) return res.status(400).json({ message: '昵称不能为空' });
   if (password.length < 6) return res.status(400).json({ message: '密码至少 6 位' });
   if (password !== confirmPassword) return res.status(400).json({ message: '两次输入的密码不一致' });
   if (!isRole(role)) return res.status(400).json({ message: '请选择正确的账号角色' });
+  if (role === 'supervisor' && supervisorCode !== supervisorRegisterCode) {
+    return res.status(403).json({ message: '监管者内码不正确，无法注册监督者账号。' });
+  }
 
   const existing = await prisma.user.findUnique({ where: { username } });
   if (existing) return res.status(409).json({ message: '用户名已存在' });
@@ -666,6 +709,43 @@ app.put('/api/messages/:id/read', requireUser, requireRole('student'), asyncHand
   res.json(updated);
 }));
 
+app.post('/api/messages/:id/reply', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const content = String(req.body.content || '').trim();
+  if (!Number.isInteger(id)) return res.status(400).json({ message: '留言 ID 不合法' });
+  if (!content) return res.status(400).json({ message: '回复内容不能为空' });
+
+  const root = await getMessageThreadRoot(id);
+  if (!root) return res.status(404).json({ message: '留言不存在' });
+  const involved = root.senderId === req.userId! || root.receiverId === req.userId!;
+  if (!involved) return res.status(403).json({ message: '不能回复不属于你的留言' });
+  const supervisorId = root.sender.role === 'supervisor' ? root.senderId : root.receiverId;
+  const isBound = await isSupervisorBoundToStudent(supervisorId, req.userId!);
+  if (!isBound) return res.status(403).json({ message: '绑定关系不存在，不能回复该留言' });
+
+  const reply = await prisma.message.create({
+    data: {
+      senderId: req.userId!,
+      receiverId: supervisorId,
+      content,
+      type: 'reply',
+      parentId: root.id
+    },
+    include: {
+      sender: { select: { id: true, username: true, nickname: true, role: true } },
+      receiver: { select: { id: true, username: true, nickname: true, role: true } }
+    }
+  });
+
+  res.status(201).json({
+    ...reply,
+    typeLabel: messageTypeLabels.reply,
+    senderName: reply.sender.nickname || reply.sender.username,
+    receiverName: reply.receiver.nickname || reply.receiver.username,
+    senderRole: reply.sender.role
+  });
+}));
+
 app.get('/api/tasks', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
   const date = normalizeDate(req.query.date);
   const subject = isSubject(req.query.subject) ? req.query.subject : undefined;
@@ -702,6 +782,11 @@ app.put('/api/tasks/:id', requireUser, requireRole('student'), asyncHandler(asyn
 
   const existing = await prisma.studyTask.findFirst({ where: { id, userId: req.userId } });
   if (!existing) return res.status(404).json({ message: '任务不存在' });
+  const bodyKeys = Object.keys(req.body || {});
+  const isStatusOnlyUpdate = bodyKeys.length === 1 && bodyKeys[0] === 'status';
+  if (req.body.status !== undefined && !isTaskStatus(req.body.status)) {
+    return res.status(400).json({ message: '任务状态不合法' });
+  }
 
   const nextTitle = req.body.title === undefined ? existing.title : String(req.body.title).trim();
   if (!nextTitle) return res.status(400).json({ message: '任务标题不能为空' });
@@ -718,6 +803,11 @@ app.put('/api/tasks/:id', requireUser, requireRole('student'), asyncHandler(asyn
       status: isTaskStatus(req.body.status) ? req.body.status : existing.status
     }
   });
+  if (isStatusOnlyUpdate) {
+    void syncExistingCheckinWithCompletedTasks(req.userId!, existing.date).catch(console.error);
+    return res.json(task);
+  }
+
   await syncExistingCheckinWithCompletedTasks(req.userId!, existing.date);
   if (task.date !== existing.date) {
     await syncExistingCheckinWithCompletedTasks(req.userId!, task.date);
@@ -907,6 +997,43 @@ app.post('/api/supervisor/messages', requireUser, requireRole('supervisor'), asy
     }
   });
   res.status(201).json(message);
+}));
+
+app.post('/api/supervisor/messages/:id/reply', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const content = String(req.body.content || '').trim();
+  if (!Number.isInteger(id)) return res.status(400).json({ message: '留言 ID 不合法' });
+  if (!content) return res.status(400).json({ message: '回复内容不能为空' });
+
+  const root = await getMessageThreadRoot(id);
+  if (!root) return res.status(404).json({ message: '留言不存在' });
+  const involved = root.senderId === req.userId! || root.receiverId === req.userId!;
+  if (!involved) return res.status(403).json({ message: '不能回复不属于你的留言' });
+  const studentId = root.sender.role === 'student' ? root.senderId : root.receiverId;
+  const isBound = await isSupervisorBoundToStudent(req.userId!, studentId);
+  if (!isBound) return res.status(403).json({ message: '只能回复已绑定学生的留言' });
+
+  const reply = await prisma.message.create({
+    data: {
+      senderId: req.userId!,
+      receiverId: studentId,
+      content,
+      type: 'reply',
+      parentId: root.id
+    },
+    include: {
+      sender: { select: { id: true, username: true, nickname: true, role: true } },
+      receiver: { select: { id: true, username: true, nickname: true, role: true } }
+    }
+  });
+
+  res.status(201).json({
+    ...reply,
+    typeLabel: messageTypeLabels.reply,
+    senderName: reply.sender.nickname || reply.sender.username,
+    receiverName: reply.receiver.nickname || reply.receiver.username,
+    senderRole: reply.sender.role
+  });
 }));
 
 app.get('/api/supervisor/messages', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {

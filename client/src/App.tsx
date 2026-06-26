@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   CalendarDays,
@@ -27,7 +27,7 @@ type Role = 'student' | 'supervisor';
 type Subject = 'english' | 'politics' | 'major1' | 'major2';
 type Priority = 'high' | 'medium' | 'low';
 type TaskStatus = 'not_started' | 'in_progress' | 'completed';
-type MessageType = 'encouragement' | 'reminder' | 'review';
+type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply';
 
 type User = {
   id: number;
@@ -103,11 +103,13 @@ type StudyMessage = {
   receiverId: number;
   content: string;
   type: MessageType;
+  parentId?: number | null;
   typeLabel: string;
   isRead: boolean;
   createdAt: string;
   senderName?: string;
   receiverName?: string;
+  senderRole?: Role;
 };
 
 type BindStatus = {
@@ -161,8 +163,10 @@ const statusLabels: Record<TaskStatus, string> = {
 const messageTypeLabels: Record<MessageType, string> = {
   encouragement: '鼓励',
   reminder: '提醒',
-  review: '复盘'
+  review: '复盘',
+  reply: '回复'
 };
+const newMessageTypes: Array<Exclude<MessageType, 'reply'>> = ['encouragement', 'reminder', 'review'];
 
 const formatLocalDate = (date: Date) => {
   const year = date.getFullYear();
@@ -179,6 +183,32 @@ const addDays = (date: string, days: number) => {
   next.setDate(next.getDate() + days);
   return formatLocalDate(next);
 };
+
+function groupMessageThreads(messages: StudyMessage[]) {
+  const roots = messages
+    .filter((message) => !message.parentId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const repliesByRoot = messages
+    .filter((message) => message.parentId)
+    .reduce<Record<number, StudyMessage[]>>((result, message) => {
+      const rootId = Number(message.parentId);
+      result[rootId] = [...(result[rootId] || []), message];
+      return result;
+    }, {});
+
+  return roots.map((root) => ({
+    root,
+    replies: (repliesByRoot[root.id] || []).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+  }));
+}
+
+function validateIntegerInput(value: string, label: string, min = 0) {
+  if (value.trim() === '') return `${label}不能为空`;
+  const number = Number(value);
+  if (!Number.isFinite(number) || !Number.isInteger(number)) return `${label}必须是整数`;
+  if (number < min) return `${label}不能小于 ${min}`;
+  return '';
+}
 
 function App() {
   const [user, setUser] = useState<User | null>(() => {
@@ -311,6 +341,7 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<Role>('student');
+  const [supervisorCode, setSupervisorCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -329,12 +360,16 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
       setError('两次输入的密码不一致');
       return;
     }
+    if (role === 'supervisor' && !supervisorCode.trim()) {
+      setError('注册监督者账号需要输入监管者内码。');
+      return;
+    }
     setLoading(true);
     try {
       const data = await api<{ token: string; user: Omit<User, 'token'> }>('/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, nickname, password, confirmPassword, role })
+        body: JSON.stringify({ username, nickname, password, confirmPassword, role, supervisorCode })
       });
       onLogin({ ...data.user, token: data.token });
     } catch (err) {
@@ -360,7 +395,7 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
           <form onSubmit={submit} className="card p-6">
             <div className="mb-6">
               <h2 className="text-2xl font-black">注册</h2>
-              <p className="mt-2 text-sm text-slate-500">慢慢来，但每天都要往前一点。</p>
+              <p className="mt-2 text-sm text-slate-500">学生账号可以直接注册；监督者账号需要内码，用于保护学习记录隐私。</p>
             </div>
             <label className="mb-4 block">
               <span className="mb-2 block text-sm font-bold text-slate-600">用户名</span>
@@ -377,6 +412,12 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
                 <option value="supervisor">监督者</option>
               </select>
             </label>
+            {role === 'supervisor' && (
+              <label className="mb-4 block">
+                <span className="mb-2 block text-sm font-bold text-slate-600">监管者内码</span>
+                <input className="field" value={supervisorCode} onChange={(event) => setSupervisorCode(event.target.value)} placeholder="请输入监管者内码" />
+              </label>
+            )}
             <label className="mb-4 block">
               <span className="mb-2 block text-sm font-bold text-slate-600">密码</span>
               <input className="field" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
@@ -432,6 +473,35 @@ function StudentApp({ user }: { user: User }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
+  function updateTaskStatusLocal(taskId: number, status: TaskStatus) {
+    setTasks((currentTasks) => {
+      const nextTasks = currentTasks.map((task) => task.id === taskId ? { ...task, status } : task);
+      setStats((currentStats) => {
+        if (!currentStats || currentStats.date !== date) return currentStats;
+        const completedTasks = nextTasks.filter((task) => task.status === 'completed');
+        return {
+          ...currentStats,
+          tasks: nextTasks,
+          totalTasks: nextTasks.length,
+          completedTasks: completedTasks.length,
+          completionRate: nextTasks.length ? Math.round((completedTasks.length / nextTasks.length) * 100) : 0,
+          totalStudyMinutes: completedTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0),
+          completedSubjects: [...new Set(completedTasks.map((task) => task.subject))]
+        };
+      });
+      return nextTasks;
+    });
+  }
+
+  async function refreshStatsOnly() {
+    try {
+      const statData = await api<StudentStats>(`/stats/student?date=${date}`, { headers: authHeaders(user) });
+      setStats(statData);
+    } catch {
+      // Keep the optimistic task UI responsive even if the secondary stats refresh fails.
+    }
+  }
+
   async function refresh() {
     setError('');
     setLoading(true);
@@ -482,7 +552,7 @@ function StudentApp({ user }: { user: User }) {
       {error && <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
       {notice && <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{notice}</p>}
       {loading && <LoadingNotice />}
-      {tab === 'plan' && <PlanPage user={user} date={date} setDate={setDate} tasks={tasks} onRefresh={refresh} />}
+      {tab === 'plan' && <PlanPage user={user} date={date} setDate={setDate} tasks={tasks} onRefresh={refresh} onTaskStatusChange={updateTaskStatusLocal} onStatsRefresh={refreshStatsOnly} />}
       {tab === 'week' && <WeekPlanPage user={user} profile={profile} onGenerated={async (startDate) => { setDate(startDate); setTab('plan'); setNotice('未来 7 天学习计划已生成'); await refresh(); }} />}
       {tab === 'checkin' && <CheckinPage user={user} date={date} setDate={setDate} tasks={tasks} stats={stats} onRefresh={refresh} />}
       {tab === 'messages' && <MessageListPage user={user} messages={messages} onRefresh={refresh} />}
@@ -653,26 +723,31 @@ function StudentBindingPage({ user, bindStatus, onRefresh }: { user: User; bindS
 
 function ProfilePage({ user, profile, onSaved }: { user: User; profile: Profile | null; onSaved: () => Promise<void> }) {
   const [examDate, setExamDate] = useState(profile?.examDate || '');
-  const [dailyAvailableMinutes, setDailyAvailableMinutes] = useState(profile?.dailyAvailableMinutes || 360);
+  const [dailyAvailableMinutes, setDailyAvailableMinutes] = useState(String(profile?.dailyAvailableMinutes ?? 360));
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setExamDate(profile?.examDate || '');
-    setDailyAvailableMinutes(profile?.dailyAvailableMinutes || 360);
+    setDailyAvailableMinutes(String(profile?.dailyAvailableMinutes ?? 360));
   }, [profile?.examDate, profile?.dailyAvailableMinutes]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError('');
     setNotice('');
+    const minutesError = validateIntegerInput(dailyAvailableMinutes, '每天可学习时长', 0);
+    if (minutesError) {
+      setError(minutesError);
+      return;
+    }
     setSaving(true);
     try {
       await api('/profile', {
         method: 'PUT',
         headers: authHeaders(user),
-        body: JSON.stringify({ examDate, dailyAvailableMinutes })
+        body: JSON.stringify({ examDate, dailyAvailableMinutes: Number(dailyAvailableMinutes) })
       });
       await onSaved();
       setNotice('目标设置已保存');
@@ -695,7 +770,7 @@ function ProfilePage({ user, profile, onSaved }: { user: User; profile: Profile 
         </label>
         <label className="mb-5 block">
           <span className="mb-2 block text-sm font-bold text-slate-600">每天可学习时长</span>
-          <input className="field" type="number" min={60} step={30} value={dailyAvailableMinutes} onChange={(event) => setDailyAvailableMinutes(Number(event.target.value))} />
+          <input className="field" type="number" min={60} step={30} value={dailyAvailableMinutes} onChange={(event) => setDailyAvailableMinutes(event.target.value)} />
         </label>
         <button className="btn btn-primary" disabled={saving}><Save size={18} /> {saving ? '保存中' : '保存目标'}</button>
       </form>
@@ -710,7 +785,7 @@ function ProfilePage({ user, profile, onSaved }: { user: User; profile: Profile 
 }
 
 function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Profile | null; onGenerated: (startDate: string) => Promise<void> }) {
-  const [dailyAvailableMinutes, setDailyAvailableMinutes] = useState(profile?.dailyAvailableMinutes || 360);
+  const [dailyAvailableMinutes, setDailyAvailableMinutes] = useState(String(profile?.dailyAvailableMinutes ?? 360));
   const [startDate, setStartDate] = useState(() => {
     return addDays(today(), 1);
   });
@@ -722,12 +797,17 @@ function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Pro
 
   async function generatePreview() {
     setError('');
+    const minutesError = validateIntegerInput(dailyAvailableMinutes, '每天可学习时长', 0);
+    if (minutesError) {
+      setError(minutesError);
+      return;
+    }
     setLoading(true);
     try {
       const data = await api<WeekPlanPreview>('/tasks/generate-week-preview', {
         method: 'POST',
         headers: authHeaders(user),
-        body: JSON.stringify({ dailyAvailableMinutes, startDate, weakness, skipExisting })
+        body: JSON.stringify({ dailyAvailableMinutes: Number(dailyAvailableMinutes), startDate, weakness, skipExisting })
       });
       setPreview(data);
     } catch (err) {
@@ -739,12 +819,17 @@ function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Pro
 
   async function confirmGenerate() {
     setError('');
+    const minutesError = validateIntegerInput(dailyAvailableMinutes, '每天可学习时长', 0);
+    if (minutesError) {
+      setError(minutesError);
+      return;
+    }
     setLoading(true);
     try {
       await api<WeekPlanPreview>('/tasks/generate-week', {
         method: 'POST',
         headers: authHeaders(user),
-        body: JSON.stringify({ dailyAvailableMinutes, startDate, weakness, skipExisting })
+        body: JSON.stringify({ dailyAvailableMinutes: Number(dailyAvailableMinutes), startDate, weakness, skipExisting })
       });
       await onGenerated(startDate);
     } catch (err) {
@@ -768,7 +853,7 @@ function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Pro
         {error && <ErrorNotice message={error} />}
         <label className="mb-4 block">
           <span className="mb-2 block text-sm font-bold text-slate-600">每天可学习时长</span>
-          <input className="field" type="number" min={120} step={30} value={dailyAvailableMinutes} onChange={(event) => setDailyAvailableMinutes(Number(event.target.value))} />
+          <input className="field" type="number" min={120} step={30} value={dailyAvailableMinutes} onChange={(event) => setDailyAvailableMinutes(event.target.value)} />
         </label>
         <label className="mb-4 block">
           <span className="mb-2 block text-sm font-bold text-slate-600">起始日期</span>
@@ -832,6 +917,7 @@ function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Pro
 function MessageListPage({ user, messages, onRefresh }: { user: User; messages: StudyMessage[]; onRefresh: () => Promise<void> }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const threads = useMemo(() => groupMessageThreads(messages), [messages]);
 
   async function markRead(message: StudyMessage) {
     setError('');
@@ -852,22 +938,100 @@ function MessageListPage({ user, messages, onRefresh }: { user: User; messages: 
       {error && <ErrorNotice message={error} />}
       {notice && <SuccessNotice message={notice} />}
       <div className="space-y-3">
-        {messages.map((message) => (
-          <article key={message.id} className="rounded-lg bg-white p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-2">
-                <span className={`pill ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{message.isRead ? '已读' : '未读'}</span>
-                <span className="pill bg-rosepaper text-slate-600">{message.typeLabel}</span>
-                <span className="pill bg-white text-slate-500">{new Date(message.createdAt).toLocaleString()}</span>
-              </div>
-              {!message.isRead && <button className="btn btn-ghost h-9 min-h-9" onClick={() => markRead(message)}><Check size={16} /> 标记已读</button>}
-            </div>
-            <p className="leading-7 text-slate-700">{message.content}</p>
-          </article>
+        {threads.map(({ root, replies }) => (
+          <MessageThreadCard
+            key={root.id}
+            root={root}
+            replies={replies}
+            replyEndpoint={`/messages/${root.id}/reply`}
+            user={user}
+            onRefresh={onRefresh}
+            onError={setError}
+            onNotice={setNotice}
+            extraAction={!root.isRead && root.receiverId === user.id ? <button className="btn btn-ghost h-9 min-h-9" onClick={() => markRead(root)}><Check size={16} /> 标记已读</button> : null}
+          />
         ))}
-        {!messages.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
+        {!threads.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
       </div>
     </section>
+  );
+}
+
+function MessageBubble({ message, nested = false }: { message: StudyMessage; nested?: boolean }) {
+  const roleLabel = message.senderRole === 'student' ? '学生' : '监督者';
+  return (
+    <div className={`rounded-lg bg-white p-4 ${nested ? 'ml-4 border-l-4 border-rosepaper' : ''}`}>
+      <div className="mb-2 flex flex-wrap gap-2">
+        <span className={`pill ${message.senderRole === 'student' ? 'bg-emerald-50 text-emerald-700' : 'bg-rosepaper text-slate-600'}`}>{roleLabel}</span>
+        <span className="pill bg-slate-100 text-slate-600">{message.senderName || roleLabel}</span>
+        <span className={`pill ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700'}`}>{message.isRead ? '已读' : '未读'}</span>
+        <span className="pill bg-white text-slate-500">{new Date(message.createdAt).toLocaleString()}</span>
+      </div>
+      <p className="leading-7 text-slate-700">{message.content}</p>
+    </div>
+  );
+}
+
+function MessageThreadCard({
+  root,
+  replies,
+  replyEndpoint,
+  user,
+  onRefresh,
+  onError,
+  onNotice,
+  extraAction
+}: {
+  root: StudyMessage;
+  replies: StudyMessage[];
+  replyEndpoint: string;
+  user: User;
+  onRefresh: () => Promise<void>;
+  onError: (message: string) => void;
+  onNotice: (message: string) => void;
+  extraAction?: React.ReactNode;
+}) {
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const content = reply.trim();
+    if (!content) {
+      onError('回复内容不能为空');
+      return;
+    }
+    onError('');
+    onNotice('');
+    setSending(true);
+    try {
+      await api(replyEndpoint, {
+        method: 'POST',
+        headers: authHeaders(user),
+        body: JSON.stringify({ content })
+      });
+      setReply('');
+      await onRefresh();
+      onNotice('回复已发送');
+    } catch (err) {
+      onError(err instanceof Error ? err.message : '回复失败');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <article className="rounded-lg bg-white/70 p-3">
+      <MessageBubble message={root} />
+      {extraAction && <div className="mt-2">{extraAction}</div>}
+      <div className="mt-3 space-y-2">
+        {replies.map((message) => <MessageBubble key={message.id} message={message} nested />)}
+      </div>
+      <form onSubmit={submit} className="mt-3 flex flex-col gap-2 md:flex-row">
+        <input className="field flex-1" value={reply} onChange={(event) => setReply(event.target.value)} placeholder="写一条回复..." />
+        <button className="btn btn-primary md:w-auto" disabled={sending || !reply.trim()}><Mail size={18} /> {sending ? '发送中' : '回复'}</button>
+      </form>
+    </article>
   );
 }
 
@@ -876,30 +1040,57 @@ function PlanPage({
   date,
   setDate,
   tasks,
-  onRefresh
+  onRefresh,
+  onTaskStatusChange,
+  onStatsRefresh
 }: {
   user: User;
   date: string;
   setDate: (date: string) => void;
   tasks: StudyTask[];
   onRefresh: () => Promise<void>;
+  onTaskStatusChange: (taskId: number, status: TaskStatus) => void;
+  onStatsRefresh: () => Promise<void>;
 }) {
   const [subject, setSubject] = useState<'all' | Subject>('all');
   const [editing, setEditing] = useState<StudyTask | null>(null);
   const [actionError, setActionError] = useState('');
+  const [updatingTaskIds, setUpdatingTaskIds] = useState<Set<number>>(() => new Set());
+  const taskRequestVersions = useRef<Record<number, number>>({});
   const grouped = useMemo(() => groupTasks(tasks.filter((task) => subject === 'all' || task.subject === subject)), [tasks, subject]);
 
   async function toggleTask(task: StudyTask) {
     setActionError('');
+    const previousStatus = task.status;
+    const nextStatus: TaskStatus = task.status === 'completed' ? 'not_started' : 'completed';
+    const nextVersion = (taskRequestVersions.current[task.id] || 0) + 1;
+    taskRequestVersions.current[task.id] = nextVersion;
+    onTaskStatusChange(task.id, nextStatus);
+    setUpdatingTaskIds((current) => new Set(current).add(task.id));
+
     try {
-      await api(`/tasks/${task.id}`, {
+      const updatedTask = await api<StudyTask>(`/tasks/${task.id}`, {
         method: 'PUT',
         headers: authHeaders(user),
-        body: JSON.stringify({ status: task.status === 'completed' ? 'in_progress' : 'completed' })
+        body: JSON.stringify({ status: nextStatus })
       });
-      await onRefresh();
+      if (taskRequestVersions.current[task.id] === nextVersion) {
+        onTaskStatusChange(task.id, updatedTask.status);
+        void onStatsRefresh();
+      }
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : '修改任务状态失败');
+      if (taskRequestVersions.current[task.id] === nextVersion) {
+        onTaskStatusChange(task.id, previousStatus);
+        setActionError(err instanceof Error ? err.message : '任务状态更新失败，请稍后重试');
+      }
+    } finally {
+      if (taskRequestVersions.current[task.id] === nextVersion) {
+        setUpdatingTaskIds((current) => {
+          const next = new Set(current);
+          next.delete(task.id);
+          return next;
+        });
+      }
     }
   }
 
@@ -950,8 +1141,10 @@ function PlanPage({
             <section key={key}>
               <h3 className="mb-3 text-lg font-black">{subjectLabels[key]}</h3>
               <div className="grid gap-3">
-                {grouped[key].map((task) => (
-                  <article key={task.id} className="card p-4">
+                {grouped[key].map((task) => {
+                  const isUpdating = updatingTaskIds.has(task.id);
+                  return (
+                  <article key={task.id} className={`card p-4 transition ${isUpdating ? 'ring-2 ring-tea/20' : ''}`}>
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <button className="flex min-w-0 items-start gap-3 text-left" onClick={() => toggleTask(task)} title="切换完成状态">
                         <span className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${task.status === 'completed' ? 'border-tea bg-tea text-white' : 'border-slate-300 bg-white'}`}>
@@ -967,12 +1160,13 @@ function PlanPage({
                         <span className="pill bg-slate-100 text-slate-600">{task.estimatedMinutes} 分钟</span>
                         <span className="pill bg-amber-50 text-amber-700">优先级 {priorityLabels[task.priority]}</span>
                         <span className="pill bg-teal-50 text-teal-700">{statusLabels[task.status]}</span>
+                        {isUpdating && <span className="pill bg-white text-slate-500">保存中</span>}
                         <button className="btn btn-ghost h-9 min-h-9 px-3" onClick={() => setEditing(task)} title="编辑任务"><Edit3 size={16} /></button>
                         <button className="btn btn-ghost h-9 min-h-9 px-3" onClick={() => removeTask(task)} title="删除任务"><Trash2 size={16} /></button>
                       </div>
                     </div>
                   </article>
-                ))}
+                );})}
                 {!grouped[key].length && <p className="rounded-lg bg-white/70 p-4 text-sm text-slate-500">这个科目今天还没有任务。</p>}
               </div>
             </section>
@@ -1003,7 +1197,7 @@ function TaskForm({
     subject: 'english' as Subject,
     title: '',
     description: '',
-    estimatedMinutes: 45,
+    estimatedMinutes: '45',
     priority: 'medium' as Priority,
     status: 'not_started' as TaskStatus
   });
@@ -1017,7 +1211,7 @@ function TaskForm({
       subject: editing.subject,
       title: editing.title,
       description: editing.description,
-      estimatedMinutes: editing.estimatedMinutes,
+      estimatedMinutes: String(editing.estimatedMinutes),
       priority: editing.priority,
       status: editing.status
     } : {
@@ -1025,7 +1219,7 @@ function TaskForm({
       subject: 'english',
       title: '',
       description: '',
-      estimatedMinutes: 45,
+      estimatedMinutes: '45',
       priority: 'medium',
       status: 'not_started'
     });
@@ -1037,6 +1231,11 @@ function TaskForm({
       setError('请填写日期和任务标题');
       return;
     }
+    const minutesError = validateIntegerInput(form.estimatedMinutes, '预计学习时长', 0);
+    if (minutesError) {
+      setError(minutesError);
+      return;
+    }
 
     setError('');
     setNotice('');
@@ -1046,7 +1245,7 @@ function TaskForm({
       await api(path, {
         method: editing ? 'PUT' : 'POST',
         headers: authHeaders(user),
-        body: JSON.stringify({ ...form, title: form.title.trim() })
+        body: JSON.stringify({ ...form, title: form.title.trim(), estimatedMinutes: Number(form.estimatedMinutes) })
       });
       await onSaved();
       setNotice(editing ? '任务已更新' : '任务已添加');
@@ -1069,7 +1268,7 @@ function TaskForm({
         </select>
         <input className="field" placeholder="任务标题" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
         <textarea className="field min-h-24" placeholder="任务描述" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
-        <input className="field" type="number" min={5} step={5} value={form.estimatedMinutes} onChange={(event) => setForm({ ...form, estimatedMinutes: Number(event.target.value) })} required />
+        <input className="field" type="number" min={5} step={5} value={form.estimatedMinutes} onChange={(event) => setForm({ ...form, estimatedMinutes: event.target.value })} required />
         <div className="grid grid-cols-2 gap-3">
           <select className="field" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as Priority })}>
             <option value="high">高优先级</option>
@@ -1432,6 +1631,7 @@ function SupervisorMessagesPage({ user, messages, onRefresh }: { user: User; mes
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
+  const threads = useMemo(() => groupMessageThreads(messages), [messages]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -1467,7 +1667,7 @@ function SupervisorMessagesPage({ user, messages, onRefresh }: { user: User; mes
         <label className="mb-4 block">
           <span className="mb-2 block text-sm font-bold text-slate-600">留言类型</span>
           <select className="field" value={type} onChange={(event) => setType(event.target.value as MessageType)}>
-            {Object.entries(messageTypeLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            {newMessageTypes.map((key) => <option key={key} value={key}>{messageTypeLabels[key]}</option>)}
           </select>
         </label>
         <label className="mb-5 block">
@@ -1479,17 +1679,19 @@ function SupervisorMessagesPage({ user, messages, onRefresh }: { user: User; mes
       <section className="card p-5">
         <h2 className="mb-4 text-2xl font-black">历史留言</h2>
         <div className="space-y-3">
-          {messages.map((message) => (
-            <article key={message.id} className="rounded-lg bg-white p-4">
-              <div className="mb-3 flex flex-wrap gap-2">
-                <span className={`pill ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{message.isRead ? '已读' : '未读'}</span>
-                <span className="pill bg-rosepaper text-slate-600">{message.typeLabel}</span>
-                <span className="pill bg-white text-slate-500">{new Date(message.createdAt).toLocaleString()}</span>
-              </div>
-              <p className="leading-7 text-slate-700">{message.content}</p>
-            </article>
+          {threads.map(({ root, replies }) => (
+            <MessageThreadCard
+              key={root.id}
+              root={root}
+              replies={replies}
+              replyEndpoint={`/supervisor/messages/${root.id}/reply`}
+              user={user}
+              onRefresh={onRefresh}
+              onError={setError}
+              onNotice={setNotice}
+            />
           ))}
-          {!messages.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
+          {!threads.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
         </div>
       </section>
     </section>

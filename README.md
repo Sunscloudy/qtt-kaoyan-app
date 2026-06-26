@@ -24,7 +24,8 @@ server/prisma/seed.ts
 
 ## 核心账号逻辑
 
-- 用户可以自行注册 `student` 或 `supervisor` 角色账号。
+- 用户可以自行注册 `student` 账号。
+- 注册 `supervisor` 账号必须输入监管者内码，当前默认内码通过 `SUPERVISOR_REGISTER_CODE` 配置。
 - 注册和 seed 的密码都会通过 bcrypt 哈希后保存。
 - 学生生成绑定码，监督者输入绑定码后建立绑定关系。
 - 监督者只能查看已绑定学生的数据，不能默认查看所有学生。
@@ -38,6 +39,7 @@ server/prisma/seed.ts
 NODE_ENV=development
 DATABASE_URL="postgresql://kaoyan:kaoyan_password@localhost:5432/kaoyan_planner?schema=public"
 JWT_SECRET="replace-with-a-long-random-secret"
+SUPERVISOR_REGISTER_CODE=260327
 PORT=4000
 CLIENT_URL="http://localhost:5173,http://127.0.0.1:5173"
 ```
@@ -54,6 +56,7 @@ VITE_API_BASE_URL="http://localhost:4000"
 NODE_ENV=production
 DATABASE_URL="Render PostgreSQL Internal Database URL"
 JWT_SECRET="replace-with-a-long-random-production-secret"
+SUPERVISOR_REGISTER_CODE=260327
 CLIENT_URL="https://your-vercel-app.vercel.app"
 ```
 
@@ -97,7 +100,7 @@ npm install --include=dev && npx prisma generate && npm run build
 Start Command：
 
 ```bash
-npx prisma db push && npx prisma db seed && npm start
+npx prisma db push && npm start
 ```
 
 环境变量：
@@ -106,8 +109,23 @@ npx prisma db push && npx prisma db seed && npm start
 NODE_ENV=production
 DATABASE_URL=Render PostgreSQL Internal Database URL
 JWT_SECRET=你的强随机密钥
+SUPERVISOR_REGISTER_CODE=260327
 CLIENT_URL=https://你的-vercel-前端域名.vercel.app
 ```
+
+部署到 Render 后，请进入：
+
+```text
+Render -> qtt-kaoyan-server -> Environment
+```
+
+新增：
+
+```bash
+SUPERVISOR_REGISTER_CODE=260327
+```
+
+然后重新部署后端。
 
 健康检查：
 
@@ -126,6 +144,11 @@ https://你的-render-后端域名.onrender.com/api/health
 
 ```bash
 npx prisma db push
+```
+
+如果需要测试账号，可以在 Render Shell 或本地连接生产库后手动执行：
+
+```bash
 npx prisma db seed
 ```
 
@@ -177,7 +200,7 @@ JWT_SECRET
 CLIENT_URL
 ```
 
-并确认 Render 日志里 `npx prisma db push` 和 `npx prisma db seed` 没有失败。
+并确认 Render 日志里 `npx prisma db push` 没有失败。如果依赖测试账号，再手动执行 `npx prisma db seed`。
 
 ### 监督后台看不到数据
 
