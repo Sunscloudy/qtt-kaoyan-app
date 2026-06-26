@@ -10,6 +10,7 @@ datasource db {
 model User {
   id        Int            @id @default(autoincrement())
   username  String         @unique
+  nickname  String         @default("")
   password  String
   role      String
   examDate  String?
@@ -20,6 +21,9 @@ model User {
   checkins  DailyCheckin[]
   sentMessages Message[]   @relation("SentMessages")
   receivedMessages Message[] @relation("ReceivedMessages")
+  studentPairs StudyPair[] @relation("StudentPairs")
+  supervisorPairs StudyPair[] @relation("SupervisorPairs")
+  bindCodes BindCode[]
 }
 
 model StudyTask {
@@ -76,4 +80,25 @@ model Message {
   updatedAt  DateTime @updatedAt
   sender     User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
   receiver   User     @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+}
+
+model StudyPair {
+  id           Int      @id @default(autoincrement())
+  studentId    Int      @unique
+  supervisorId Int
+  createdAt    DateTime @default(now())
+  student      User     @relation("StudentPairs", fields: [studentId], references: [id], onDelete: Cascade)
+  supervisor   User     @relation("SupervisorPairs", fields: [supervisorId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, supervisorId])
+}
+
+model BindCode {
+  id        Int      @id @default(autoincrement())
+  studentId Int
+  code      String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }

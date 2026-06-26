@@ -41,19 +41,22 @@ function formatDate(date: Date) {
 }
 
 async function main() {
-  await prisma.checkinTask.deleteMany();
-  await prisma.dailyCheckin.deleteMany();
-  await prisma.studyTask.deleteMany();
-  await prisma.message.deleteMany();
-  await prisma.user.deleteMany();
-
   const passwordHash = await bcrypt.hash('123456', 10);
   const examDate = new Date();
   examDate.setDate(examDate.getDate() + 168);
 
-  const student = await prisma.user.create({
-    data: {
+  const student = await prisma.user.upsert({
+    where: { username: 'student' },
+    update: {
+      password: passwordHash,
+      nickname: '考研学生',
+      role: 'student',
+      examDate: formatDate(examDate),
+      dailyAvailableMinutes: 360
+    },
+    create: {
       username: 'student',
+      nickname: '考研学生',
       password: passwordHash,
       role: 'student',
       examDate: formatDate(examDate),
@@ -61,46 +64,73 @@ async function main() {
     }
   });
 
-  const supervisor = await prisma.user.create({
-    data: { username: 'supervisor', password: passwordHash, role: 'supervisor' }
+  const supervisor = await prisma.user.upsert({
+    where: { username: 'supervisor' },
+    update: {
+      password: passwordHash,
+      nickname: '监督者',
+      role: 'supervisor'
+    },
+    create: {
+      username: 'supervisor',
+      nickname: '监督者',
+      password: passwordHash,
+      role: 'supervisor'
+    }
+  });
+
+  await prisma.studyPair.upsert({
+    where: { studentId: student.id },
+    update: { supervisorId: supervisor.id },
+    create: { studentId: student.id, supervisorId: supervisor.id }
   });
 
   const today = formatDate(new Date());
   for (const subject of subjects) {
     for (const template of taskTemplates[subject]) {
-      await prisma.studyTask.create({
-        data: {
-          userId: student.id,
-          date: today,
-          subject,
-          title: template.title,
-          description: template.description,
-          estimatedMinutes: template.estimatedMinutes,
-          priority: template.priority,
-          status: 'not_started'
-        }
+      const existing = await prisma.studyTask.findFirst({
+        where: { userId: student.id, date: today, subject, title: template.title }
       });
+      if (!existing) {
+        await prisma.studyTask.create({
+          data: {
+            userId: student.id,
+            date: today,
+            subject,
+            title: template.title,
+            description: template.description,
+            estimatedMinutes: template.estimatedMinutes,
+            priority: template.priority,
+            status: 'not_started'
+          }
+        });
+      }
     }
   }
 
-  await prisma.message.createMany({
-    data: [
-      {
-        senderId: supervisor.id,
-        receiverId: student.id,
-        type: 'encouragement',
-        content: '你不是一个人在坚持，我会在后台看着你的努力，也会一直陪着你。',
-        isRead: false
-      },
-      {
-        senderId: supervisor.id,
-        receiverId: student.id,
-        type: 'reminder',
-        content: '今天也慢慢来，但不要停。专业课背诵可以放在精力最好的时间段。',
-        isRead: false
-      }
-    ]
+  const messageCount = await prisma.message.count({
+    where: { senderId: supervisor.id, receiverId: student.id }
   });
+  if (messageCount === 0) {
+    await prisma.message.createMany({
+      data: [
+        {
+          senderId: supervisor.id,
+          receiverId: student.id,
+          type: 'encouragement',
+          content: '你不是一个人在坚持，我会在后台看着你的努力，也会一直陪着你。',
+          isRead: false
+        },
+        {
+          senderId: supervisor.id,
+          receiverId: student.id,
+          type: 'reminder',
+          content: '今天也慢慢来，但不要停。专业课背诵可以放在精力最好的时间段。',
+          isRead: false
+        }
+      ]
+    });
+  }
 }
 
 main()

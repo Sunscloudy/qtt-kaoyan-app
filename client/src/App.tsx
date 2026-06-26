@@ -32,6 +32,7 @@ type MessageType = 'encouragement' | 'reminder' | 'review';
 type User = {
   id: number;
   username: string;
+  nickname: string;
   role: Role;
   token: string;
 };
@@ -62,7 +63,10 @@ type DailyCheckin = {
 };
 
 type StudentStats = {
+  unbound?: boolean;
+  message?: string;
   date: string;
+  student?: Pick<User, 'id' | 'username' | 'nickname'>;
   tasks: StudyTask[];
   totalTasks: number;
   completedTasks: number;
@@ -104,6 +108,19 @@ type StudyMessage = {
   createdAt: string;
   senderName?: string;
   receiverName?: string;
+};
+
+type BindStatus = {
+  bound: boolean;
+  supervisor: { id: number; username: string; nickname: string } | null;
+  activeCode: { code: string; expiresAt: string } | null;
+};
+
+type BoundStudent = {
+  id: number;
+  username: string;
+  nickname: string;
+  boundAt: string;
 };
 
 type WeekPlanPreview = {
@@ -170,6 +187,7 @@ function App() {
     const parsed = JSON.parse(raw) as User;
     return parsed.token ? parsed : null;
   });
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
 
   useEffect(() => {
     function handleAuthExpired() {
@@ -189,7 +207,11 @@ function App() {
     localStorage.removeItem('kaoyan-user');
   }
 
-  if (!user) return <LoginPage onLogin={handleLogin} />;
+  if (!user) {
+    return authMode === 'login'
+      ? <LoginPage onLogin={handleLogin} onRegister={() => setAuthMode('register')} />
+      : <RegisterPage onLogin={handleLogin} onLoginPage={() => setAuthMode('login')} />;
+  }
 
   return (
     <Shell user={user} onLogout={logout}>
@@ -218,9 +240,9 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json();
 }
 
-function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
-  const [username, setUsername] = useState('student');
-  const [password, setPassword] = useState('123456');
+function LoginPage({ onLogin, onRegister }: { onLogin: (user: User) => void; onRegister: () => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -259,7 +281,7 @@ function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
           <form onSubmit={submit} className="card p-6">
             <div className="mb-6">
               <h2 className="text-2xl font-black">登录</h2>
-              <p className="mt-2 text-sm text-slate-500">默认账号：student / supervisor，密码均为 123456。</p>
+              <p className="mt-2 text-sm text-slate-500">可以使用自己的账号登录；开发测试账号仍保留为 student / supervisor。</p>
             </div>
             <label className="mb-4 block">
               <span className="mb-2 block text-sm font-bold text-slate-600">用户名</span>
@@ -272,6 +294,103 @@ function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
             {error && <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
             <button className="btn btn-primary w-full" disabled={loading}>
               <Check size={18} /> {loading ? '登录中' : '进入 App'}
+            </button>
+            <button type="button" className="btn btn-ghost mt-3 w-full" onClick={onRegister}>
+              还没有账号？去注册
+            </button>
+          </form>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void; onLoginPage: () => void }) {
+  const [username, setUsername] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [role, setRole] = useState<Role>('student');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError('');
+    if (!username.trim() || !nickname.trim()) {
+      setError('请填写用户名和昵称');
+      return;
+    }
+    if (password.length < 6) {
+      setError('密码至少 6 位');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('两次输入的密码不一致');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await api<{ token: string; user: Omit<User, 'token'> }>('/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, nickname, password, confirmPassword, role })
+      });
+      onLogin({ ...data.user, token: data.token });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '注册失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen px-5 py-8">
+      <div className="mx-auto flex min-h-[calc(100vh-64px)] max-w-5xl items-center">
+        <section className="grid w-full gap-6 md:grid-cols-[1fr_1fr]">
+          <div className="flex flex-col justify-center">
+            <p className="mb-3 inline-flex w-fit items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-tea shadow-sm">
+              <Heart size={16} /> 你不是一个人在坚持
+            </p>
+            <h1 className="text-4xl font-black leading-tight text-ink md:text-5xl">创建你的学习陪伴账号</h1>
+            <p className="mt-5 max-w-xl text-lg leading-8 text-slate-600">
+              学生注册后可以生成绑定码，监督者输入绑定码后，才能看到对应学生的打卡和留言状态。
+            </p>
+          </div>
+          <form onSubmit={submit} className="card p-6">
+            <div className="mb-6">
+              <h2 className="text-2xl font-black">注册</h2>
+              <p className="mt-2 text-sm text-slate-500">慢慢来，但每天都要往前一点。</p>
+            </div>
+            <label className="mb-4 block">
+              <span className="mb-2 block text-sm font-bold text-slate-600">用户名</span>
+              <input className="field" value={username} onChange={(event) => setUsername(event.target.value)} required />
+            </label>
+            <label className="mb-4 block">
+              <span className="mb-2 block text-sm font-bold text-slate-600">昵称</span>
+              <input className="field" value={nickname} onChange={(event) => setNickname(event.target.value)} required />
+            </label>
+            <label className="mb-4 block">
+              <span className="mb-2 block text-sm font-bold text-slate-600">角色</span>
+              <select className="field" value={role} onChange={(event) => setRole(event.target.value as Role)}>
+                <option value="student">考研学生</option>
+                <option value="supervisor">监督者</option>
+              </select>
+            </label>
+            <label className="mb-4 block">
+              <span className="mb-2 block text-sm font-bold text-slate-600">密码</span>
+              <input className="field" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            </label>
+            <label className="mb-4 block">
+              <span className="mb-2 block text-sm font-bold text-slate-600">确认密码</span>
+              <input className="field" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+            </label>
+            {error && <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+            <button className="btn btn-primary w-full" disabled={loading}>
+              <Check size={18} /> {loading ? '注册中' : '注册并进入 App'}
+            </button>
+            <button type="button" className="btn btn-ghost mt-3 w-full" onClick={onLoginPage}>
+              已有账号？去登录
             </button>
           </form>
         </section>
@@ -289,7 +408,7 @@ function Shell({ user, onLogout, children }: { user: User; onLogout: () => void;
           <h1 className="mt-1 text-3xl font-black text-ink">考研规划打卡</h1>
         </div>
         <div className="flex items-center gap-3">
-          <span className="pill bg-white text-slate-600 shadow-sm">{user.username} · {user.role === 'student' ? '学生' : '监督'}</span>
+          <span className="pill bg-white text-slate-600 shadow-sm">{user.nickname || user.username} · {user.role === 'student' ? '学生' : '监督'}</span>
           <button className="btn btn-ghost" onClick={onLogout} title="退出登录">
             <LogOut size={18} /> 退出
           </button>
@@ -301,13 +420,14 @@ function Shell({ user, onLogout, children }: { user: User; onLogout: () => void;
 }
 
 function StudentApp({ user }: { user: User }) {
-  const [tab, setTab] = useState<'plan' | 'week' | 'checkin' | 'messages' | 'profile' | 'history'>('plan');
+  const [tab, setTab] = useState<'plan' | 'week' | 'checkin' | 'messages' | 'binding' | 'profile' | 'history'>('plan');
   const [date, setDate] = useState(today());
   const [tasks, setTasks] = useState<StudyTask[]>([]);
   const [stats, setStats] = useState<StudentStats | null>(null);
   const [checkins, setCheckins] = useState<DailyCheckin[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [messages, setMessages] = useState<StudyMessage[]>([]);
+  const [bindStatus, setBindStatus] = useState<BindStatus | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -321,15 +441,17 @@ function StudentApp({ user }: { user: User }) {
         api<StudentStats>(`/stats/student?date=${date}`, { headers: authHeaders(user) }),
         api<DailyCheckin[]>('/checkins', { headers: authHeaders(user) })
       ]);
-      const [profileData, messageData] = await Promise.all([
+      const [profileData, messageData, bindData] = await Promise.all([
         api<Profile>('/profile', { headers: authHeaders(user) }),
-        api<StudyMessage[]>('/messages', { headers: authHeaders(user) })
+        api<StudyMessage[]>('/messages', { headers: authHeaders(user) }),
+        api<BindStatus>('/bind-status', { headers: authHeaders(user) })
       ]);
       setTasks(taskData);
       setStats(statData);
       setCheckins(checkinData);
       setProfile(profileData);
       setMessages(messageData);
+      setBindStatus(bindData);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
     } finally {
@@ -343,13 +465,14 @@ function StudentApp({ user }: { user: User }) {
 
   return (
     <>
-      <StudentDashboard stats={stats} profile={profile} messages={messages} onSetProfile={() => setTab('profile')} onOpenMessages={() => setTab('messages')} />
+      <StudentDashboard stats={stats} profile={profile} messages={messages} bindStatus={bindStatus} onSetProfile={() => setTab('profile')} onOpenMessages={() => setTab('messages')} onOpenBinding={() => setTab('binding')} />
       <TabBar
         items={[
           ['plan', '今日计划', ClipboardList],
           ['week', '一周计划生成', Sparkles],
           ['checkin', '每日打卡', CalendarDays],
           ['messages', `留言${messages.some((message) => !message.isRead) ? ' · 未读' : ''}`, MessageCircle],
+          ['binding', '绑定监督者', Heart],
           ['profile', '目标设置', Target],
           ['history', '历史记录', BarChart3]
         ]}
@@ -363,6 +486,7 @@ function StudentApp({ user }: { user: User }) {
       {tab === 'week' && <WeekPlanPage user={user} profile={profile} onGenerated={async (startDate) => { setDate(startDate); setTab('plan'); setNotice('未来 7 天学习计划已生成'); await refresh(); }} />}
       {tab === 'checkin' && <CheckinPage user={user} date={date} setDate={setDate} tasks={tasks} stats={stats} onRefresh={refresh} />}
       {tab === 'messages' && <MessageListPage user={user} messages={messages} onRefresh={refresh} />}
+      {tab === 'binding' && <StudentBindingPage user={user} bindStatus={bindStatus} onRefresh={refresh} />}
       {tab === 'profile' && <ProfilePage user={user} profile={profile} onSaved={refresh} />}
       {tab === 'history' && <HistoryPage checkins={checkins} user={user} />}
     </>
@@ -373,14 +497,18 @@ function StudentDashboard({
   stats,
   profile,
   messages,
+  bindStatus,
   onSetProfile,
-  onOpenMessages
+  onOpenMessages,
+  onOpenBinding
 }: {
   stats: StudentStats | null;
   profile: Profile | null;
   messages: StudyMessage[];
+  bindStatus: BindStatus | null;
   onSetProfile: () => void;
   onOpenMessages: () => void;
+  onOpenBinding: () => void;
 }) {
   const recentMessages = messages.slice(0, 3);
   const unreadCount = messages.filter((message) => !message.isRead).length;
@@ -393,6 +521,19 @@ function StudentDashboard({
         <Metric title="预计学习时长" value={`${stats?.totalStudyMinutes ?? 0} 分钟`} />
         <Metric title="连续打卡" value={`${stats?.streak ?? 0} 天`} />
       </div>
+      <section className="card p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-bold text-tea">监督绑定</p>
+            <p className="mt-1 text-sm text-slate-600">
+              {bindStatus?.bound
+                ? `已绑定监督者：${bindStatus.supervisor?.nickname || bindStatus.supervisor?.username}`
+                : '还没有绑定监督者，可以生成绑定码邀请他陪你一起坚持。'}
+            </p>
+          </div>
+          <button className="btn btn-ghost" onClick={onOpenBinding}><Heart size={18} /> {bindStatus?.bound ? '查看绑定' : '生成绑定码'}</button>
+        </div>
+      </section>
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="card p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -438,6 +579,74 @@ function StudentDashboard({
           </div>
         </section>
       </div>
+    </section>
+  );
+}
+
+function StudentBindingPage({ user, bindStatus, onRefresh }: { user: User; bindStatus: BindStatus | null; onRefresh: () => Promise<void> }) {
+  const [code, setCode] = useState(bindStatus?.activeCode?.code || '');
+  const [expiresAt, setExpiresAt] = useState(bindStatus?.activeCode?.expiresAt || '');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setCode(bindStatus?.activeCode?.code || '');
+    setExpiresAt(bindStatus?.activeCode?.expiresAt || '');
+  }, [bindStatus?.activeCode?.code, bindStatus?.activeCode?.expiresAt]);
+
+  async function generateCode() {
+    setError('');
+    setNotice('');
+    setLoading(true);
+    try {
+      const data = await api<{ code: string; expiresAt: string }>('/bind-code', {
+        method: 'POST',
+        headers: authHeaders(user)
+      });
+      setCode(data.code);
+      setExpiresAt(data.expiresAt);
+      await onRefresh();
+      setNotice('绑定码已生成，把它发给监督者就可以啦。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成绑定码失败');
+      await onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="grid gap-5 lg:grid-cols-[420px_1fr]">
+      <div className="card h-fit p-5">
+        <h2 className="mb-3 text-2xl font-black">绑定监督者</h2>
+        {error && <ErrorNotice message={error} />}
+        {notice && <SuccessNotice message={notice} />}
+        {bindStatus?.bound ? (
+          <div className="rounded-lg bg-emerald-50 p-4 text-sm font-bold text-emerald-700">
+            已绑定监督者：{bindStatus.supervisor?.nickname || bindStatus.supervisor?.username}
+          </div>
+        ) : (
+          <>
+            <p className="mb-4 text-sm leading-6 text-slate-600">把这个绑定码发给监督者，对方输入后就可以看到你的学习记录啦。</p>
+            {code && (
+              <div className="mb-4 rounded-lg bg-white p-5 text-center">
+                <p className="text-sm font-bold text-slate-500">当前绑定码</p>
+                <p className="mt-2 text-4xl font-black tracking-[0.2em] text-ink">{code}</p>
+                <p className="mt-2 text-sm text-slate-500">有效期至：{new Date(expiresAt).toLocaleString()}</p>
+              </div>
+            )}
+            <button className="btn btn-primary" onClick={generateCode} disabled={loading}>
+              <Sparkles size={18} /> {loading ? '生成中' : code ? '重新生成绑定码' : '生成绑定码'}
+            </button>
+          </>
+        )}
+      </div>
+      <aside className="card p-5">
+        <p className="text-sm font-bold text-tea">小提示</p>
+        <h3 className="mt-2 text-xl font-black">绑定之后才会共享学习记录</h3>
+        <p className="mt-3 leading-7 text-slate-600">监督者只能看到与你建立绑定关系后的学习数据和留言状态，其他账号不能查看你的计划。</p>
+      </aside>
     </section>
   );
 }
@@ -1036,11 +1245,12 @@ function HistoryPage({ checkins, user }: { checkins: DailyCheckin[]; user: User 
 }
 
 function SupervisorApp({ user }: { user: User }) {
-  const [tab, setTab] = useState<'dashboard' | 'history' | 'stats' | 'messages'>('dashboard');
+  const [tab, setTab] = useState<'dashboard' | 'binding' | 'history' | 'stats' | 'messages'>('dashboard');
   const [dashboard, setDashboard] = useState<StudentStats | null>(null);
   const [checkins, setCheckins] = useState<DailyCheckin[]>([]);
   const [stats, setStats] = useState<SevenDayStats | null>(null);
   const [messages, setMessages] = useState<StudyMessage[]>([]);
+  const [students, setStudents] = useState<BoundStudent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -1048,16 +1258,18 @@ function SupervisorApp({ user }: { user: User }) {
     setLoading(true);
     setError('');
     try {
-      const [dashboardData, checkinData, statsData, messageData] = await Promise.all([
+      const [dashboardData, checkinData, statsData, messageData, studentData] = await Promise.all([
         api<StudentStats>('/supervisor/dashboard', { headers: authHeaders(user) }),
         api<DailyCheckin[]>('/supervisor/checkins', { headers: authHeaders(user) }),
         api<SevenDayStats>('/supervisor/stats', { headers: authHeaders(user) }),
-        api<StudyMessage[]>('/supervisor/messages', { headers: authHeaders(user) })
+        api<StudyMessage[]>('/supervisor/messages', { headers: authHeaders(user) }),
+        api<BoundStudent[]>('/supervisor/students', { headers: authHeaders(user) })
       ]);
       setDashboard(dashboardData);
       setCheckins(checkinData);
       setStats(statsData);
       setMessages(messageData);
+      setStudents(studentData);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载监督后台失败');
     } finally {
@@ -1074,6 +1286,7 @@ function SupervisorApp({ user }: { user: User }) {
       <TabBar
         items={[
           ['dashboard', '后台首页', LayoutDashboard],
+          ['binding', '绑定学生', Heart],
           ['history', '打卡详情', CalendarDays],
           ['stats', '数据统计', BarChart3],
           ['messages', '留言', MessageCircle]
@@ -1083,7 +1296,8 @@ function SupervisorApp({ user }: { user: User }) {
       />
       {loading && <LoadingNotice />}
       {error && <ErrorNotice message={error} />}
-      {tab === 'dashboard' && dashboard && <SupervisorDashboard dashboard={dashboard} />}
+      {tab === 'dashboard' && dashboard && <SupervisorDashboard dashboard={dashboard} onOpenBinding={() => setTab('binding')} />}
+      {tab === 'binding' && <SupervisorBindingPage user={user} students={students} onRefresh={async () => { await refresh(); setTab('dashboard'); }} />}
       {tab === 'history' && <SupervisorHistory user={user} checkins={checkins} />}
       {tab === 'stats' && stats && <StatsPage stats={stats} />}
       {tab === 'messages' && <SupervisorMessagesPage user={user} messages={messages} onRefresh={refresh} />}
@@ -1091,9 +1305,87 @@ function SupervisorApp({ user }: { user: User }) {
   );
 }
 
-function SupervisorDashboard({ dashboard }: { dashboard: StudentStats }) {
+function SupervisorBindingPage({ user, students, onRefresh }: { user: User; students: BoundStudent[]; onRefresh: () => Promise<void> }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError('');
+    setNotice('');
+    if (!code.trim()) {
+      setError('请输入绑定码');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api('/supervisor/bind-student', {
+        method: 'POST',
+        headers: authHeaders(user),
+        body: JSON.stringify({ code: code.trim() })
+      });
+      setCode('');
+      setNotice('绑定成功，已可以查看她的学习记录。');
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '绑定失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="grid gap-5 lg:grid-cols-[420px_1fr]">
+      <form onSubmit={submit} className="card h-fit p-5">
+        <h2 className="mb-3 text-2xl font-black">绑定学生</h2>
+        <p className="mb-4 text-sm leading-6 text-slate-600">请输入她在学生端生成的绑定码，绑定后才能查看她的打卡和学习完成情况。</p>
+        {error && <ErrorNotice message={error} />}
+        {notice && <SuccessNotice message={notice} />}
+        <label className="mb-5 block">
+          <span className="mb-2 block text-sm font-bold text-slate-600">绑定码</span>
+          <input className="field text-center text-2xl font-black tracking-[0.2em]" value={code} onChange={(event) => setCode(event.target.value)} maxLength={8} />
+        </label>
+        <button className="btn btn-primary" disabled={saving}><Check size={18} /> {saving ? '绑定中' : '确认绑定'}</button>
+      </form>
+      <aside className="card p-5">
+        <h3 className="mb-4 text-xl font-black">已绑定学生</h3>
+        <div className="space-y-2">
+          {students.map((student) => (
+            <div key={student.id} className="rounded-lg bg-white p-3 text-sm font-bold text-slate-600">
+              {student.nickname || student.username}
+              <span className="ml-2 text-xs font-normal text-slate-400">绑定于 {new Date(student.boundAt).toLocaleString()}</span>
+            </div>
+          ))}
+          {!students.length && <p className="text-sm text-slate-500">还没有绑定学生，请输入她给你的绑定码。</p>}
+        </div>
+      </aside>
+    </section>
+  );
+}
+
+function SupervisorDashboard({ dashboard, onOpenBinding }: { dashboard: StudentStats; onOpenBinding: () => void }) {
+  if (dashboard.unbound) {
+    return (
+      <section className="card p-6">
+        <p className="text-sm font-bold text-tea">还没有绑定学生</p>
+        <h2 className="mt-2 text-2xl font-black">请输入她给你的绑定码</h2>
+        <p className="mt-3 max-w-2xl leading-7 text-slate-600">
+          绑定成功后，你才能看到对应学生的打卡、任务、统计和留言状态。这样她的学习记录只会分享给真正绑定的监督者。
+        </p>
+        <button className="btn btn-primary mt-5" onClick={onOpenBinding}><Heart size={18} /> 去绑定学生</button>
+      </section>
+    );
+  }
+
   return (
     <section>
+      {dashboard.student && (
+        <p className="mb-4 rounded-lg bg-white px-4 py-3 text-sm font-bold text-slate-600">
+          当前查看：{dashboard.student.nickname || dashboard.student.username}
+        </p>
+      )}
       <div className="mb-5 grid gap-4 md:grid-cols-5">
         <Metric title="今日状态" value={dashboard.isCheckedIn ? '已打卡' : '未打卡'} />
         <Metric title="学习时长" value={`${dashboard.checkin?.totalStudyMinutes ?? dashboard.totalStudyMinutes} 分钟`} />

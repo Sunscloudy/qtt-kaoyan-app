@@ -4,6 +4,7 @@ import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomInt } from 'crypto';
 
 const prisma = new PrismaClient();
 const app = express();
@@ -222,10 +223,11 @@ async function getMessagesForStudent(userId: number) {
   }));
 }
 
-async function getSupervisorMessages() {
-  const studentId = await getStudentId();
+async function getSupervisorMessages(supervisorId: number, studentId?: number) {
+  const student = await getBoundStudentForSupervisor(supervisorId, studentId);
+  if (!student) return [];
   const messages = await prisma.message.findMany({
-    where: { receiverId: studentId },
+    where: { receiverId: student.id, senderId: supervisorId },
     include: {
       sender: { select: { username: true } },
       receiver: { select: { username: true } }
@@ -322,10 +324,59 @@ function requireRole(role: Role) {
   };
 }
 
-async function getStudentId() {
-  const student = await prisma.user.findFirst({ where: { role: 'student' } });
-  if (!student) throw new Error('缺少学生账号，请先运行 seed');
-  return student.id;
+function isRole(value: unknown): value is Role {
+  return value === 'student' || value === 'supervisor';
+}
+
+function createAuthResponse(user: { id: number; username: string; nickname: string; role: string }) {
+  const token = jwt.sign({ userId: user.id, role: user.role }, jwtSecret, { expiresIn: '7d' });
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      nickname: user.nickname || user.username,
+      role: user.role
+    }
+  };
+}
+
+function generateBindCode() {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
+function getRequestedStudentId(req: AuthedRequest) {
+  const value = req.query.studentId ?? req.body?.studentId;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
+async function getBoundStudentForSupervisor(supervisorId: number, studentId?: number) {
+  const pair = await prisma.studyPair.findFirst({
+    where: { supervisorId, ...(studentId ? { studentId } : {}) },
+    include: { student: { select: { id: true, username: true, nickname: true, role: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+  return pair?.student ?? null;
+}
+
+function emptySupervisorDashboard(date = today()) {
+  return {
+    unbound: true,
+    message: '还没有绑定学生，请输入她给你的绑定码。',
+    date,
+    tasks: [],
+    totalTasks: 0,
+    completedTasks: 0,
+    completionRate: 0,
+    totalStudyMinutes: 0,
+    completedSubjects: [],
+    checkin: null,
+    isCheckedIn: false,
+    streak: 0,
+    recentMessages: [],
+    unreadMessages: 0
+  };
 }
 
 async function getCompletionSummary(userId: number, date: string) {
@@ -439,6 +490,35 @@ async function getSevenDayStats(userId: number) {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+app.post('/api/register', asyncHandler(async (req, res) => {
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  const confirmPassword = String(req.body.confirmPassword || '');
+  const nickname = String(req.body.nickname || '').trim();
+  const role = req.body.role;
+
+  if (!username) return res.status(400).json({ message: '用户名不能为空' });
+  if (!nickname) return res.status(400).json({ message: '昵称不能为空' });
+  if (password.length < 6) return res.status(400).json({ message: '密码至少 6 位' });
+  if (password !== confirmPassword) return res.status(400).json({ message: '两次输入的密码不一致' });
+  if (!isRole(role)) return res.status(400).json({ message: '请选择正确的账号角色' });
+
+  const existing = await prisma.user.findUnique({ where: { username } });
+  if (existing) return res.status(409).json({ message: '用户名已存在' });
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const user = await prisma.user.create({
+    data: {
+      username,
+      nickname,
+      password: passwordHash,
+      role
+    }
+  });
+
+  res.status(201).json(createAuthResponse(user));
+}));
+
 app.post('/api/login', asyncHandler(async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -451,8 +531,7 @@ app.post('/api/login', asyncHandler(async (req, res) => {
     return res.status(401).json({ message: '账号或密码错误' });
   }
 
-  const token = jwt.sign({ userId: user.id, role: user.role }, jwtSecret, { expiresIn: '7d' });
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json(createAuthResponse(user));
 }));
 
 app.get('/api/profile', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
@@ -520,6 +599,60 @@ app.post('/api/tasks/generate-week', requireUser, requireRole('student'), asyncH
 
 app.get('/api/messages', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
   res.json(await getMessagesForStudent(req.userId!));
+}));
+
+app.post('/api/bind-code', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
+  const existingPair = await prisma.studyPair.findUnique({
+    where: { studentId: req.userId! },
+    include: { supervisor: { select: { id: true, username: true, nickname: true } } }
+  });
+  if (existingPair) {
+    return res.status(400).json({
+      message: '你已经绑定监督者了',
+      bound: true,
+      supervisor: existingPair.supervisor
+    });
+  }
+
+  await prisma.bindCode.updateMany({
+    where: { studentId: req.userId!, used: false },
+    data: { used: true }
+  });
+
+  let code = generateBindCode();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const existing = await prisma.bindCode.findUnique({ where: { code } });
+    if (!existing) break;
+    code = generateBindCode();
+  }
+
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const bindCode = await prisma.bindCode.create({
+    data: {
+      studentId: req.userId!,
+      code,
+      expiresAt
+    }
+  });
+
+  res.status(201).json({ code: bindCode.code, expiresAt: bindCode.expiresAt, used: bindCode.used });
+}));
+
+app.get('/api/bind-status', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
+  const pair = await prisma.studyPair.findUnique({
+    where: { studentId: req.userId! },
+    include: { supervisor: { select: { id: true, username: true, nickname: true } } }
+  });
+  const latestCode = await prisma.bindCode.findFirst({
+    where: { studentId: req.userId!, used: false, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  res.json({
+    bound: Boolean(pair),
+    supervisor: pair?.supervisor ?? null,
+    activeCode: latestCode ? { code: latestCode.code, expiresAt: latestCode.expiresAt } : null
+  });
 }));
 
 app.put('/api/messages/:id/read', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
@@ -679,8 +812,54 @@ app.get('/api/stats/student', requireUser, requireRole('student'), asyncHandler(
   res.json({ date, ...summary, checkin, isCheckedIn: Boolean(checkin), streak });
 }));
 
-app.get('/api/supervisor/dashboard', requireUser, requireRole('supervisor'), asyncHandler(async (_req: AuthedRequest, res) => {
-  const userId = await getStudentId();
+app.get('/api/supervisor/students', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const pairs = await prisma.studyPair.findMany({
+    where: { supervisorId: req.userId! },
+    include: { student: { select: { id: true, username: true, nickname: true, createdAt: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+  res.json(pairs.map((pair) => ({ ...pair.student, boundAt: pair.createdAt })));
+}));
+
+app.post('/api/supervisor/bind-student', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const code = String(req.body.code || '').trim();
+  if (!/^[A-Za-z0-9]{6,8}$/.test(code)) {
+    return res.status(400).json({ message: '请输入 6 位数字或 6-8 位字母数字绑定码' });
+  }
+
+  const bindCode = await prisma.bindCode.findUnique({
+    where: { code },
+    include: { student: { select: { id: true, username: true, nickname: true, role: true } } }
+  });
+  if (!bindCode) return res.status(404).json({ message: '绑定码不存在' });
+  if (bindCode.used) return res.status(400).json({ message: '绑定码已经使用过' });
+  if (bindCode.expiresAt.getTime() <= Date.now()) return res.status(400).json({ message: '绑定码已过期，请让她重新生成' });
+  if (bindCode.student.role !== 'student') return res.status(400).json({ message: '绑定码对应的账号不是学生' });
+
+  const existingPair = await prisma.studyPair.findUnique({
+    where: { studentId: bindCode.studentId },
+    include: { supervisor: { select: { id: true, username: true, nickname: true } } }
+  });
+  if (existingPair) {
+    return res.status(400).json({ message: '这个学生已经绑定监督者了', supervisor: existingPair.supervisor });
+  }
+
+  const pair = await prisma.$transaction(async (tx) => {
+    const created = await tx.studyPair.create({
+      data: { studentId: bindCode.studentId, supervisorId: req.userId! },
+      include: { student: { select: { id: true, username: true, nickname: true } } }
+    });
+    await tx.bindCode.update({ where: { id: bindCode.id }, data: { used: true } });
+    return created;
+  });
+
+  res.status(201).json({ message: '绑定成功', student: pair.student });
+}));
+
+app.get('/api/supervisor/dashboard', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const student = await getBoundStudentForSupervisor(req.userId!, getRequestedStudentId(req));
+  if (!student) return res.json(emptySupervisorDashboard());
+  const userId = student.id;
   const date = today();
   const summary = await getCompletionSummary(userId, date);
   const checkin = await withCheckinDetails(userId, date);
@@ -689,23 +868,27 @@ app.get('/api/supervisor/dashboard', requireUser, requireRole('supervisor'), asy
     prisma.message.findMany({ where: { receiverId: userId }, orderBy: { createdAt: 'desc' }, take: 3 }),
     prisma.message.count({ where: { receiverId: userId, isRead: false } })
   ]);
-  res.json({ date, ...summary, checkin, isCheckedIn: Boolean(checkin), streak, recentMessages, unreadMessages });
+  res.json({ date, student, ...summary, checkin, isCheckedIn: Boolean(checkin), streak, recentMessages, unreadMessages });
 }));
 
-app.get('/api/supervisor/checkins', requireUser, requireRole('supervisor'), asyncHandler(async (_req: AuthedRequest, res) => {
-  const userId = await getStudentId();
+app.get('/api/supervisor/checkins', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const student = await getBoundStudentForSupervisor(req.userId!, getRequestedStudentId(req));
+  if (!student) return res.json([]);
+  const userId = student.id;
   const checkins = await prisma.dailyCheckin.findMany({ where: { userId }, orderBy: { date: 'desc' } });
   res.json(checkins.map((item) => ({ ...item, completedSubjects: parseSubjects(item.completedSubjects) })));
 }));
 
 app.get('/api/supervisor/checkins/:date', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
-  const userId = await getStudentId();
-  res.json(await withCheckinDetails(userId, String(req.params.date)));
+  const student = await getBoundStudentForSupervisor(req.userId!, getRequestedStudentId(req));
+  if (!student) return res.json(null);
+  res.json(await withCheckinDetails(student.id, String(req.params.date)));
 }));
 
-app.get('/api/supervisor/stats', requireUser, requireRole('supervisor'), asyncHandler(async (_req: AuthedRequest, res) => {
-  const userId = await getStudentId();
-  res.json(await getSevenDayStats(userId));
+app.get('/api/supervisor/stats', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const student = await getBoundStudentForSupervisor(req.userId!, getRequestedStudentId(req));
+  if (!student) return res.json({ studyMinutes: [], completedTasks: [], subjectMinutes: [] });
+  res.json(await getSevenDayStats(student.id));
 }));
 
 app.post('/api/supervisor/messages', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
@@ -713,11 +896,12 @@ app.post('/api/supervisor/messages', requireUser, requireRole('supervisor'), asy
   if (!content) return res.status(400).json({ message: '留言内容不能为空' });
   if (!isMessageType(req.body.type)) return res.status(400).json({ message: '留言类型不合法' });
 
-  const receiverId = await getStudentId();
+  const student = await getBoundStudentForSupervisor(req.userId!, getRequestedStudentId(req));
+  if (!student) return res.status(400).json({ message: '还没有绑定学生，请先输入她给你的绑定码' });
   const message = await prisma.message.create({
     data: {
       senderId: req.userId!,
-      receiverId,
+      receiverId: student.id,
       content,
       type: req.body.type
     }
@@ -725,8 +909,8 @@ app.post('/api/supervisor/messages', requireUser, requireRole('supervisor'), asy
   res.status(201).json(message);
 }));
 
-app.get('/api/supervisor/messages', requireUser, requireRole('supervisor'), asyncHandler(async (_req: AuthedRequest, res) => {
-  res.json(await getSupervisorMessages());
+app.get('/api/supervisor/messages', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  res.json(await getSupervisorMessages(req.userId!, getRequestedStudentId(req)));
 }));
 
 app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {

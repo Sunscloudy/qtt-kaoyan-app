@@ -7,9 +7,12 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "db:push": "prisma db push --schema ../prisma/schema.prisma",
-    "db:migrate": "prisma migrate deploy --schema ../prisma/schema.prisma",
-    "db:seed": "tsx ../prisma/seed.ts"
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "prisma db seed"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
