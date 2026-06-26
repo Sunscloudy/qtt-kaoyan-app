@@ -1,0 +1,26 @@
+{
+  "name": "kaoyan-checkin-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "install:all": "npm install --workspaces --include-workspace-root",
+    "db:push": "npm --workspace server run db:push",
+    "db:migrate": "npm --workspace server run db:migrate",
+    "db:seed": "npm --workspace server run db:seed",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "dev": "concurrently \"npm --workspace server run dev\" \"npm --workspace client run dev\"",
+    "build": "npm --workspace client run build && npm --workspace server run build",
+    "start": "npm --workspace server run start"
+  },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

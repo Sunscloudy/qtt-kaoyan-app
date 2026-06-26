@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int            @id @default(autoincrement())
+  username  String         @unique
+  password  String
+  role      String
+  examDate  String?
+  dailyAvailableMinutes Int?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  tasks     StudyTask[]
+  checkins  DailyCheckin[]
+  sentMessages Message[]   @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+}
+
+model StudyTask {
+  id               Int           @id @default(autoincrement())
+  userId           Int
+  date             String
+  subject          String
+  title            String
+  description      String
+  estimatedMinutes Int
+  priority         String
+  status           String        @default("not_started")
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkinTasks     CheckinTask[]
+}
+
+model DailyCheckin {
+  id                 Int           @id @default(autoincrement())
+  userId             Int
+  date               String
+  totalStudyMinutes  Int
+  completedSubjects  String
+  summary            String
+  moodScore          Int
+  note               String
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkinTasks       CheckinTask[]
+
+  @@unique([userId, date])
+}
+
+model CheckinTask {
+  id        Int          @id @default(autoincrement())
+  checkinId Int
+  taskId    Int
+  checkin   DailyCheckin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+  task      StudyTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([checkinId, taskId])
+}
+
+model Message {
+  id         Int      @id @default(autoincrement())
+  senderId   Int
+  receiverId Int
+  content    String
+  type       String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User     @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+}
