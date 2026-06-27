@@ -97,7 +97,7 @@ const messageTypeLabels: Record<MessageType, string> = {
   review: '复盘',
   reply: '回复'
 };
-const moodStickers = new Set(['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了']);
+const moodStickers = new Set(['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', ]);
 
 type AuthedRequest = Request & { userId?: number; userRole?: Role };
 type AsyncHandler = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<unknown>;

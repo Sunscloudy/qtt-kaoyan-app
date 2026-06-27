@@ -174,7 +174,7 @@ const messageTypeLabels: Record<MessageType, string> = {
   reply: '回复'
 };
 const newMessageTypes: Array<Exclude<MessageType, 'reply'>> = ['encouragement', 'reminder', 'review'];
-const moodStickerOptions = ['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了'];
+const moodStickerOptions = ['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', ];
 const titleMilestones = [
   { days: 1, title: '今天开始选手' },
   { days: 3, title: '小小坚持家' },
