@@ -551,7 +551,7 @@ function Shell({ user, onLogout, children }: { user: User; onLogout: () => void;
       <header className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
           <p className="text-sm font-bold text-tea">坚持不是一下子做到很多，而是每天都继续</p>
-          <h1 className="mt-1 text-3xl font-black text-ink">考研规划打卡</h1>
+          <h1 className="mt-1 text-3xl font-black text-ink">拳头拳头考研</h1>
         </div>
         <div className="flex items-center gap-3">
           <span className="pill bg-white text-slate-600 shadow-sm">{user.nickname || user.username} · {user.role === 'student' ? '学生' : '监督'}</span>

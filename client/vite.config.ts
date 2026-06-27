@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
-        name: '考研陪伴计划',
-        short_name: '考研计划',
-        description: '温柔的考研规划、打卡和监督陪伴 App',
+        name: '拳头考研',
+        short_name: '拳头考研',
+        description: '温柔的拳头考研、打卡和监督陪伴 App',
         theme_color: '#5b8c7a',
         background_color: '#fff7f2',
         display: 'standalone',
