@@ -97,6 +97,7 @@ const messageTypeLabels: Record<MessageType, string> = {
   review: '复盘',
   reply: '回复'
 };
+const moodStickers = new Set(['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了']);
 
 type AuthedRequest = Request & { userId?: number; userRole?: Role };
 type AsyncHandler = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<unknown>;
@@ -854,6 +855,9 @@ app.post('/api/checkins', requireUser, requireRole('student'), asyncHandler(asyn
   const totalStudyMinutes = req.body.totalStudyMinutes === undefined
     ? completedTasks.reduce((sum, task) => sum + task.estimatedMinutes, 0)
     : normalizeMinutes(req.body.totalStudyMinutes, 0);
+  const moodSticker = moodStickers.has(String(req.body.moodSticker || ''))
+    ? String(req.body.moodSticker)
+    : '🙂 还不错';
 
   const checkin = await prisma.dailyCheckin.upsert({
     where: { userId_date: { userId: req.userId!, date } },
@@ -864,6 +868,7 @@ app.post('/api/checkins', requireUser, requireRole('student'), asyncHandler(asyn
       completedSubjects: JSON.stringify(completedSubjects),
       summary: req.body.summary || '',
       moodScore: Number(req.body.moodScore || 3),
+      moodSticker,
       note: req.body.note || ''
     },
     update: {
@@ -871,6 +876,7 @@ app.post('/api/checkins', requireUser, requireRole('student'), asyncHandler(asyn
       completedSubjects: JSON.stringify(completedSubjects),
       summary: req.body.summary || '',
       moodScore: Number(req.body.moodScore || 3),
+      moodSticker,
       note: req.body.note || ''
     }
   });

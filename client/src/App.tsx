@@ -58,6 +58,7 @@ type DailyCheckin = {
   completedSubjectLabels?: string[];
   summary: string;
   moodScore: number;
+  moodSticker?: string | null;
   note: string;
   completedTaskItems?: StudyTask[];
   summaryStats?: StudentStats;
@@ -173,6 +174,26 @@ const messageTypeLabels: Record<MessageType, string> = {
   reply: '回复'
 };
 const newMessageTypes: Array<Exclude<MessageType, 'reply'>> = ['encouragement', 'reminder', 'review'];
+const moodStickerOptions = ['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了'];
+const titleMilestones = [
+  { days: 1, title: '今天开始选手' },
+  { days: 3, title: '小小坚持家' },
+  { days: 7, title: '一周不掉线' },
+  { days: 14, title: '考研小战士' },
+  { days: 30, title: '超强稳定选手' },
+  { days: 60, title: '拳头考研王者' },
+  { days: 100, title: '全世界最可爱岸上人预备役' }
+];
+
+function getCheckinTitleInfo(streak = 0) {
+  const achieved = [...titleMilestones].reverse().find((item) => streak >= item.days) || { days: 0, title: '还未解锁称号' };
+  const next = titleMilestones.find((item) => streak < item.days) || null;
+  return {
+    currentTitle: achieved.title,
+    nextTitle: next?.title || null,
+    daysToNext: next ? next.days - streak : 0
+  };
+}
 
 const formatLocalDate = (date: Date) => {
   const year = date.getFullYear();
@@ -689,6 +710,7 @@ function StudentDashboard({
 }) {
   const recentMessages = messages.slice(0, 3);
   const unreadCount = messages.filter((message) => message.receiverId === user.id && !message.isRead).length;
+  const titleInfo = getCheckinTitleInfo(stats?.streak ?? 0);
 
   return (
     <section className="mb-5 space-y-4">
@@ -709,6 +731,21 @@ function StudentDashboard({
             </p>
           </div>
           <button className="btn btn-ghost" onClick={onOpenBinding}><Heart size={18} /> {bindStatus?.bound ? '查看绑定' : '生成绑定码'}</button>
+        </div>
+      </section>
+      <section className="card p-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-bold text-tea">连续打卡称号</p>
+            <h2 className="mt-1 text-2xl font-black text-ink">{titleInfo.currentTitle}</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              已连续打卡 {stats?.streak ?? 0} 天
+              {titleInfo.nextTitle
+                ? `，距离「${titleInfo.nextTitle}」还差 ${titleInfo.daysToNext} 天。`
+                : '，已经解锁最高称号啦。'}
+            </p>
+          </div>
+          <span className="pill bg-rosepaper text-slate-600">慢慢来，但每天都要往前一点</span>
         </div>
       </section>
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
@@ -1426,6 +1463,7 @@ function CheckinPage({
   const [summary, setSummary] = useState('');
   const [note, setNote] = useState('');
   const [moodScore, setMoodScore] = useState(4);
+  const [moodSticker, setMoodSticker] = useState(moodStickerOptions[0]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1434,6 +1472,7 @@ function CheckinPage({
     setSummary(stats?.checkin?.summary || '');
     setNote(stats?.checkin?.note || '');
     setMoodScore(stats?.checkin?.moodScore || 4);
+    setMoodSticker(stats?.checkin?.moodSticker || moodStickerOptions[0]);
   }, [stats?.checkin?.id, date]);
 
   async function submit(event: React.FormEvent) {
@@ -1450,11 +1489,12 @@ function CheckinPage({
           completedTaskIds: completed.map((task) => task.id),
           summary,
           note,
-          moodScore
+          moodScore,
+          moodSticker
         })
       });
       await onRefresh();
-      setNotice('今天的努力已经记录下来啦。');
+      setNotice('今日小红花已送达 🌹 你今天也认真得很可爱。');
     } catch (err) {
       setError(err instanceof Error ? err.message : '提交打卡失败');
     } finally {
@@ -1498,6 +1538,21 @@ function CheckinPage({
           <span className="mb-2 block text-sm font-bold text-slate-600">今日状态评分：{moodScore}</span>
           <input className="w-full accent-[#5b8c7a]" type="range" min={1} max={5} value={moodScore} onChange={(event) => setMoodScore(Number(event.target.value))} />
         </label>
+        <div className="mb-4">
+          <span className="mb-2 block text-sm font-bold text-slate-600">心情贴纸</span>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {moodStickerOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={`btn justify-start ${moodSticker === option ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setMoodSticker(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="mb-5 block">
           <span className="mb-2 block text-sm font-bold text-slate-600">备注</span>
           <textarea className="field min-h-20" value={note} onChange={(event) => setNote(event.target.value)} placeholder="可以写一句鼓励自己的话。" />
@@ -1515,6 +1570,7 @@ function CheckinPage({
             <p className="font-black text-ink">已记录</p>
             <p>{stats.checkin.summary || '暂无总结'}</p>
             <p className="mt-2">状态评分：{stats.checkin.moodScore}/5</p>
+            <p className="mt-2">心情贴纸：{stats.checkin.moodSticker || moodStickerOptions[0]}</p>
           </div>
         )}
       </aside>
@@ -1548,7 +1604,7 @@ function HistoryPage({ checkins, user }: { checkins: DailyCheckin[]; user: User 
         <div className="space-y-2">
           {checkins.map((item) => (
             <button key={item.id} className={`w-full rounded-lg px-3 py-3 text-left text-sm font-bold ${selectedDate === item.date ? 'bg-tea text-white' : 'bg-white text-slate-600'}`} onClick={() => setSelectedDate(item.date)}>
-              {item.date} · {item.totalStudyMinutes} 分钟
+              {item.date} · {item.moodSticker || moodStickerOptions[0]} · {item.totalStudyMinutes} 分钟
             </button>
           ))}
           {!checkins.length && <p className="text-sm text-slate-500">还没有历史打卡。</p>}
@@ -1694,6 +1750,7 @@ function SupervisorDashboard({ user, dashboard, onOpenBinding }: { user: User; d
       </section>
     );
   }
+  const titleInfo = getCheckinTitleInfo(dashboard.streak);
 
   return (
     <section>
@@ -1709,6 +1766,13 @@ function SupervisorDashboard({ user, dashboard, onOpenBinding }: { user: User; d
         <Metric title="完成科目" value={`${dashboard.completedSubjects.length} 门`} />
         <Metric title="连续打卡" value={`${dashboard.streak} 天`} />
       </div>
+      <section className="card mb-5 p-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <Metric title="今日小红花" value={dashboard.isCheckedIn ? '已送达' : '未送达'} />
+          <Metric title="当前称号" value={titleInfo.currentTitle} />
+          <Metric title="下一称号" value={titleInfo.nextTitle ? `还差 ${titleInfo.daysToNext} 天` : '已达最高'} />
+        </div>
+      </section>
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
         {!dashboard.isCheckedIn && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-bold text-amber-700 lg:col-span-2">今天还没有打卡，可以晚点再看看。</p>}
         <section className="card p-5">
@@ -1853,7 +1917,7 @@ function SupervisorHistory({ user, checkins }: { user: User; checkins: DailyChec
         <div className="space-y-2">
           {checkins.map((item) => (
             <button key={item.id} className="w-full rounded-lg bg-white px-3 py-3 text-left text-sm font-bold text-slate-600" onClick={() => setDate(item.date)}>
-              {item.date} · {item.totalStudyMinutes} 分钟
+              {item.date} · {item.moodSticker || moodStickerOptions[0]} · {item.totalStudyMinutes} 分钟
             </button>
           ))}
         </div>
@@ -1925,6 +1989,9 @@ function CheckinDetail({ detail, compact = false }: { detail: DailyCheckin | nul
         <Metric title="学习时长" value={`${detail.totalStudyMinutes} 分钟`} />
         <Metric title="状态评分" value={`${detail.moodScore}/5`} />
         <Metric title="完成科目" value={`${detail.completedSubjects.length} 门`} />
+      </div>
+      <div className="mb-4 rounded-lg bg-rosepaper px-4 py-3 text-sm font-bold text-slate-600">
+        心情贴纸：{detail.moodSticker || moodStickerOptions[0]}
       </div>
       <div className="mb-4 flex flex-wrap gap-2">
         {detail.completedSubjects.map((subject) => <span key={subject} className={`pill border ${subjectTone[subject]}`}>{subjectLabels[subject]}</span>)}

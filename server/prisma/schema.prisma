@@ -50,6 +50,7 @@ model DailyCheckin {
   completedSubjects  String
   summary            String
   moodScore          Int
+  moodSticker        String?
   note               String
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
