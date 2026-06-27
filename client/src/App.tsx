@@ -417,7 +417,6 @@ function LoginPage({ onLogin, onRegister }: { onLogin: (user: User) => void; onR
           <form onSubmit={submit} className="card p-6">
             <div className="mb-6">
               <h2 className="text-2xl font-black">登录</h2>
-              <p className="mt-2 text-sm text-slate-500">可以使用自己的账号登录；开发测试账号仍保留为 student / supervisor。</p>
             </div>
             <label className="mb-4 block">
               <span className="mb-2 block text-sm font-bold text-slate-600">用户名</span>
