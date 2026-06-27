@@ -14,7 +14,8 @@ import {
   Settings,
   Sparkles,
   Target,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
 
 const rawApiBase = import.meta.env.VITE_API_BASE_URL || '';
@@ -134,6 +135,11 @@ type WeekPlanPreview = {
   message?: string;
 };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+};
+
 const subjectLabels: Record<Subject, string> = {
   english: '英语',
   politics: '政治',
@@ -239,14 +245,114 @@ function App() {
 
   if (!user) {
     return authMode === 'login'
-      ? <LoginPage onLogin={handleLogin} onRegister={() => setAuthMode('register')} />
-      : <RegisterPage onLogin={handleLogin} onLoginPage={() => setAuthMode('login')} />;
+      ? (
+        <>
+          <LoginPage onLogin={handleLogin} onRegister={() => setAuthMode('register')} />
+          <MobileInstallPrompt />
+        </>
+      )
+      : (
+        <>
+          <RegisterPage onLogin={handleLogin} onLoginPage={() => setAuthMode('login')} />
+          <MobileInstallPrompt />
+        </>
+      );
   }
 
   return (
-    <Shell user={user} onLogout={logout}>
-      {user.role === 'student' ? <StudentApp user={user} /> : <SupervisorApp user={user} />}
-    </Shell>
+    <>
+      <Shell user={user} onLogout={logout}>
+        {user.role === 'student' ? <StudentApp user={user} /> : <SupervisorApp user={user} />}
+      </Shell>
+      <MobileInstallPrompt />
+    </>
+  );
+}
+
+function MobileInstallPrompt() {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem('kaoyan-pwa-install-dismissed') === 'true');
+  const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia('(max-width: 768px)');
+    const standaloneQuery = window.matchMedia('(display-mode: standalone)');
+    const detectMobile = () => {
+      const ua = navigator.userAgent.toLowerCase();
+      const touchDevice = navigator.maxTouchPoints > 1;
+      setIsMobile((mobileQuery.matches || /iphone|ipad|ipod|android/.test(ua)) && !standaloneQuery.matches && touchDevice);
+    };
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallEvent(event as BeforeInstallPromptEvent);
+    };
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+
+    detectMobile();
+    mobileQuery.addEventListener('change', detectMobile);
+    standaloneQuery.addEventListener('change', detectMobile);
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      mobileQuery.removeEventListener('change', detectMobile);
+      standaloneQuery.removeEventListener('change', detectMobile);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  function closeInstallTip() {
+    localStorage.setItem('kaoyan-pwa-install-dismissed', 'true');
+    setDismissed(true);
+  }
+
+  async function installApp() {
+    if (!installEvent) return;
+    await installEvent.prompt();
+    await installEvent.userChoice.catch(() => undefined);
+    closeInstallTip();
+  }
+
+  const ua = navigator.userAgent.toLowerCase();
+  const isIOS = /iphone|ipad|ipod/.test(ua);
+  const isAndroid = /android/.test(ua);
+  const showInstallTip = isMobile && !dismissed;
+
+  if (online && !showInstallTip) return null;
+
+  return (
+    <div className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg border border-tea/15 bg-white/95 p-4 text-sm text-slate-600 shadow-soft backdrop-blur">
+      {!online && (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-700">
+          当前网络不可用，打卡和同步需要联网后继续。
+        </p>
+      )}
+      {showInstallTip && (
+        <div className="flex gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="font-black text-ink">添加到主屏幕</p>
+            <p className="mt-1 leading-6">
+              可以把这个页面添加到主屏幕，像 App 一样每天打开。
+              {isIOS && ' 点击分享按钮，然后选择“添加到主屏幕”。'}
+              {isAndroid && ' 点击浏览器菜单，然后选择“安装应用”或“添加到主屏幕”。'}
+            </p>
+            {installEvent && (
+              <button className="btn btn-primary mt-3 h-10 min-h-10 px-3" onClick={installApp}>
+                安装应用
+              </button>
+            )}
+          </div>
+          <button className="btn btn-ghost h-10 min-h-10 px-3" onClick={closeInstallTip} aria-label="关闭安装提示">
+            <X size={16} />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -535,13 +641,13 @@ function StudentApp({ user }: { user: User }) {
 
   return (
     <>
-      <StudentDashboard stats={stats} profile={profile} messages={messages} bindStatus={bindStatus} onSetProfile={() => setTab('profile')} onOpenMessages={() => setTab('messages')} onOpenBinding={() => setTab('binding')} />
+      <StudentDashboard user={user} stats={stats} profile={profile} messages={messages} bindStatus={bindStatus} onSetProfile={() => setTab('profile')} onOpenMessages={() => setTab('messages')} onOpenBinding={() => setTab('binding')} />
       <TabBar
         items={[
           ['plan', '今日计划', ClipboardList],
           ['week', '一周计划生成', Sparkles],
           ['checkin', '每日打卡', CalendarDays],
-          ['messages', `留言${messages.some((message) => !message.isRead) ? ' · 未读' : ''}`, MessageCircle],
+          ['messages', `留言${messages.some((message) => message.receiverId === user.id && !message.isRead) ? ' · 未读' : ''}`, MessageCircle],
           ['binding', '绑定监督者', Heart],
           ['profile', '目标设置', Target],
           ['history', '历史记录', BarChart3]
@@ -564,6 +670,7 @@ function StudentApp({ user }: { user: User }) {
 }
 
 function StudentDashboard({
+  user,
   stats,
   profile,
   messages,
@@ -572,6 +679,7 @@ function StudentDashboard({
   onOpenMessages,
   onOpenBinding
 }: {
+  user: User;
   stats: StudentStats | null;
   profile: Profile | null;
   messages: StudyMessage[];
@@ -581,7 +689,7 @@ function StudentDashboard({
   onOpenBinding: () => void;
 }) {
   const recentMessages = messages.slice(0, 3);
-  const unreadCount = messages.filter((message) => !message.isRead).length;
+  const unreadCount = messages.filter((message) => message.receiverId === user.id && !message.isRead).length;
 
   return (
     <section className="mb-5 space-y-4">
@@ -641,7 +749,7 @@ function StudentDashboard({
           <div className="space-y-2">
             {recentMessages.map((message) => (
               <div key={message.id} className="rounded-lg bg-white p-3 text-sm text-slate-600">
-                <span className={`pill mr-2 ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{message.typeLabel}</span>
+                <span className={`pill mr-2 ${message.receiverId === user.id && !message.isRead ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{message.typeLabel}</span>
                 {message.content}
               </div>
             ))}
@@ -931,6 +1039,14 @@ function MessageListPage({ user, messages, onRefresh }: { user: User; messages: 
     }
   }
 
+  useEffect(() => {
+    const unreadReceived = messages.filter((message) => message.receiverId === user.id && !message.isRead);
+    if (!unreadReceived.length) return;
+    Promise.all(unreadReceived.map((message) => api(`/messages/${message.id}/read`, { method: 'PUT', headers: authHeaders(user) })))
+      .then(() => onRefresh())
+      .catch(() => undefined);
+  }, [messages.map((message) => `${message.id}:${message.isRead}`).join(','), user.id]);
+
   return (
     <section className="card p-5">
       <h2 className="mb-2 text-2xl font-black">留言</h2>
@@ -957,14 +1073,16 @@ function MessageListPage({ user, messages, onRefresh }: { user: User; messages: 
   );
 }
 
-function MessageBubble({ message, nested = false }: { message: StudyMessage; nested?: boolean }) {
+function MessageBubble({ message, user, nested = false }: { message: StudyMessage; user: User; nested?: boolean }) {
   const roleLabel = message.senderRole === 'student' ? '学生' : '监督者';
+  const isOwnMessage = message.senderId === user.id;
+  const readLabel = isOwnMessage ? '已发送' : message.isRead ? '已读' : '未读';
   return (
     <div className={`rounded-lg bg-white p-4 ${nested ? 'ml-4 border-l-4 border-rosepaper' : ''}`}>
       <div className="mb-2 flex flex-wrap gap-2">
         <span className={`pill ${message.senderRole === 'student' ? 'bg-emerald-50 text-emerald-700' : 'bg-rosepaper text-slate-600'}`}>{roleLabel}</span>
         <span className="pill bg-slate-100 text-slate-600">{message.senderName || roleLabel}</span>
-        <span className={`pill ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700'}`}>{message.isRead ? '已读' : '未读'}</span>
+        <span className={`pill ${!isOwnMessage && !message.isRead ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>{readLabel}</span>
         <span className="pill bg-white text-slate-500">{new Date(message.createdAt).toLocaleString()}</span>
       </div>
       <p className="leading-7 text-slate-700">{message.content}</p>
@@ -1022,10 +1140,10 @@ function MessageThreadCard({
 
   return (
     <article className="rounded-lg bg-white/70 p-3">
-      <MessageBubble message={root} />
+      <MessageBubble message={root} user={user} />
       {extraAction && <div className="mt-2">{extraAction}</div>}
       <div className="mt-3 space-y-2">
-        {replies.map((message) => <MessageBubble key={message.id} message={message} nested />)}
+        {replies.map((message) => <MessageBubble key={message.id} message={message} user={user} nested />)}
       </div>
       <form onSubmit={submit} className="mt-3 flex flex-col gap-2 md:flex-row">
         <input className="field flex-1" value={reply} onChange={(event) => setReply(event.target.value)} placeholder="写一条回复..." />
@@ -1495,7 +1613,7 @@ function SupervisorApp({ user }: { user: User }) {
       />
       {loading && <LoadingNotice />}
       {error && <ErrorNotice message={error} />}
-      {tab === 'dashboard' && dashboard && <SupervisorDashboard dashboard={dashboard} onOpenBinding={() => setTab('binding')} />}
+      {tab === 'dashboard' && dashboard && <SupervisorDashboard user={user} dashboard={dashboard} onOpenBinding={() => setTab('binding')} />}
       {tab === 'binding' && <SupervisorBindingPage user={user} students={students} onRefresh={async () => { await refresh(); setTab('dashboard'); }} />}
       {tab === 'history' && <SupervisorHistory user={user} checkins={checkins} />}
       {tab === 'stats' && stats && <StatsPage stats={stats} />}
@@ -1564,7 +1682,7 @@ function SupervisorBindingPage({ user, students, onRefresh }: { user: User; stud
   );
 }
 
-function SupervisorDashboard({ dashboard, onOpenBinding }: { dashboard: StudentStats; onOpenBinding: () => void }) {
+function SupervisorDashboard({ user, dashboard, onOpenBinding }: { user: User; dashboard: StudentStats; onOpenBinding: () => void }) {
   if (dashboard.unbound) {
     return (
       <section className="card p-6">
@@ -1610,12 +1728,16 @@ function SupervisorDashboard({ dashboard, onOpenBinding }: { dashboard: StudentS
             <h3 className="mb-2 text-xl font-black">留言状态</h3>
             <p className="text-sm leading-6 text-slate-600">未读留言 {dashboard.unreadMessages ?? 0} 条。我会在后台看着你的努力，也会一直陪着你。</p>
             <div className="mt-3 space-y-2">
-              {(dashboard.recentMessages || []).slice(0, 3).map((message) => (
-                <div key={message.id} className="rounded-lg bg-white p-3 text-sm text-slate-600">
-                  <span className={`pill mr-2 ${message.isRead ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{message.isRead ? '已读' : '未读'}</span>
-                  {message.content}
-                </div>
-              ))}
+              {(dashboard.recentMessages || []).slice(0, 3).map((message) => {
+                const unreadForMe = message.receiverId === user.id && !message.isRead;
+                const label = message.senderId === user.id ? '已发送' : unreadForMe ? '未读' : '已读';
+                return (
+                  <div key={message.id} className="rounded-lg bg-white p-3 text-sm text-slate-600">
+                    <span className={`pill mr-2 ${unreadForMe ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{label}</span>
+                    {message.content}
+                  </div>
+                );
+              })}
             </div>
           </section>
           <CheckinDetail detail={dashboard.checkin} compact />
@@ -1632,6 +1754,14 @@ function SupervisorMessagesPage({ user, messages, onRefresh }: { user: User; mes
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const threads = useMemo(() => groupMessageThreads(messages), [messages]);
+
+  useEffect(() => {
+    const unreadReceived = messages.filter((message) => message.receiverId === user.id && !message.isRead);
+    if (!unreadReceived.length) return;
+    Promise.all(unreadReceived.map((message) => api(`/supervisor/messages/${message.id}/read`, { method: 'PUT', headers: authHeaders(user) })))
+      .then(() => onRefresh())
+      .catch(() => undefined);
+  }, [messages.map((message) => `${message.id}:${message.isRead}`).join(','), user.id]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -1769,14 +1899,16 @@ function ChartCard({ title, items, suffix }: { title: string; items: Array<{ dat
   return (
     <section className="card p-5">
       <h2 className="mb-4 text-xl font-black">{title}</h2>
-      <div className="flex h-64 items-end gap-3">
-        {items.map((item) => (
-          <div key={item.date} className="flex h-full flex-1 flex-col justify-end gap-2">
-            <div className="flex min-h-8 items-end justify-center text-xs font-bold text-slate-500">{item.value}{suffix}</div>
-            <div className="rounded-t-lg bg-tea" style={{ height: `${Math.max(8, (item.value / max) * 170)}px` }} />
-            <div className="text-center text-xs font-bold text-slate-500">{item.date.slice(5)}</div>
-          </div>
-        ))}
+      <div className="overflow-x-auto pb-1">
+        <div className="flex h-64 min-w-[320px] items-end gap-3">
+          {items.map((item) => (
+            <div key={item.date} className="flex h-full flex-1 flex-col justify-end gap-2">
+              <div className="flex min-h-8 items-end justify-center text-xs font-bold text-slate-500">{item.value}{suffix}</div>
+              <div className="rounded-t-lg bg-tea" style={{ height: `${Math.max(8, (item.value / max) * 170)}px` }} />
+              <div className="text-center text-xs font-bold text-slate-500">{item.date.slice(5)}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

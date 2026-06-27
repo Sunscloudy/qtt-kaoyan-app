@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-- 前端：React + TypeScript + Vite + Tailwind CSS
+- 前端：React + TypeScript + Vite + Tailwind CSS + PWA
 - 后端：Node.js + Express + TypeScript
 - 数据库：Render PostgreSQL / 本地 PostgreSQL
 - ORM：Prisma
@@ -169,6 +169,36 @@ VITE_API_BASE_URL=https://你的-render-后端域名.onrender.com
 ```
 
 修改环境变量后需要重新部署前端。
+
+生产构建会自动生成 PWA 相关文件，包括 `manifest.webmanifest` 和 service worker。普通浏览器访问不受影响，手机浏览器可以将 Vercel 页面添加到主屏幕。
+
+## 移动端 PWA 使用
+
+这是一个 PWA，不需要从 App Store 或应用商店下载。手机添加到主屏幕后，会像独立 App 一样打开；学习任务、打卡和留言仍需要联网同步到云端。
+
+iPhone：
+
+1. 用 Safari 打开 Vercel 前端网址。
+2. 点击浏览器底部或顶部的分享按钮。
+3. 选择“添加到主屏幕”。
+4. 桌面会出现“考研计划”图标。
+
+Android：
+
+1. 用 Chrome 打开 Vercel 前端网址。
+2. 点击浏览器菜单。
+3. 选择“安装应用”或“添加到主屏幕”。
+4. 桌面会出现“考研计划”图标。
+
+本地测试 PWA：
+
+```bash
+cd client
+npm run build
+npm run preview
+```
+
+然后用浏览器访问 preview 地址。PWA 安装能力通常需要 HTTPS 或 localhost 环境；线上 Vercel 默认是 HTTPS，可以直接测试添加到主屏幕。
 
 ## 部署后测试
 

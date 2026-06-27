@@ -955,8 +955,17 @@ app.get('/api/supervisor/dashboard', requireUser, requireRole('supervisor'), asy
   const checkin = await withCheckinDetails(userId, date);
   const streak = await getStreak(userId);
   const [recentMessages, unreadMessages] = await Promise.all([
-    prisma.message.findMany({ where: { receiverId: userId }, orderBy: { createdAt: 'desc' }, take: 3 }),
-    prisma.message.count({ where: { receiverId: userId, isRead: false } })
+    prisma.message.findMany({
+      where: {
+        OR: [
+          { senderId: req.userId!, receiverId: userId },
+          { senderId: userId, receiverId: req.userId! }
+        ]
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 3
+    }),
+    prisma.message.count({ where: { receiverId: req.userId!, senderId: userId, isRead: false } })
   ]);
   res.json({ date, student, ...summary, checkin, isCheckedIn: Boolean(checkin), streak, recentMessages, unreadMessages });
 }));
@@ -1034,6 +1043,22 @@ app.post('/api/supervisor/messages/:id/reply', requireUser, requireRole('supervi
     receiverName: reply.receiver.nickname || reply.receiver.username,
     senderRole: reply.sender.role
   });
+}));
+
+app.put('/api/supervisor/messages/:id/read', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ message: '留言 ID 不合法' });
+
+  const message = await prisma.message.findFirst({
+    where: { id, receiverId: req.userId! }
+  });
+  if (!message) return res.status(404).json({ message: '留言不存在' });
+
+  const isBound = await isSupervisorBoundToStudent(req.userId!, message.senderId);
+  if (!isBound) return res.status(403).json({ message: '只能标记已绑定学生发来的留言' });
+
+  const updated = await prisma.message.update({ where: { id }, data: { isRead: true } });
+  res.json(updated);
 }));
 
 app.get('/api/supervisor/messages', requireUser, requireRole('supervisor'), asyncHandler(async (req: AuthedRequest, res) => {
