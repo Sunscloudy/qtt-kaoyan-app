@@ -304,17 +304,14 @@ button {
   }
 
   .app-shell {
-    padding-bottom: calc(110px + env(safe-area-inset-bottom));
+    padding-bottom: calc(28px + env(safe-area-inset-bottom));
   }
 
   .tabbar {
-    position: fixed;
-    left: 12px;
-    right: 12px;
-    bottom: calc(10px + env(safe-area-inset-bottom));
+    position: sticky;
+    top: calc(8px + env(safe-area-inset-top));
     z-index: 40;
-    max-width: 760px;
-    margin: 0 auto;
+    margin: 0 0 18px;
     display: flex;
     flex-wrap: nowrap;
     gap: 6px;
