@@ -588,6 +588,10 @@ function Shell({ user, onLogout, children }: { user: User; onLogout: () => void;
 
 function StudentApp({ user }: { user: User }) {
   const [tab, setTab] = useState<'plan' | 'week' | 'checkin' | 'messages' | 'binding' | 'profile' | 'history'>('plan');
+  const bindSectionRef = useRef<HTMLDivElement | null>(null);
+  const examTargetRef = useRef<HTMLDivElement | null>(null);
+  const [pendingScrollTarget, setPendingScrollTarget] = useState<'binding' | 'profile' | null>(null);
+  const [highlightTarget, setHighlightTarget] = useState<'binding' | 'profile' | null>(null);
   const [date, setDate] = useState(today());
   const [tasks, setTasks] = useState<StudyTask[]>([]);
   const [stats, setStats] = useState<StudentStats | null>(null);
@@ -659,9 +663,25 @@ function StudentApp({ user }: { user: User }) {
     refresh();
   }, [date]);
 
+  useEffect(() => {
+    if (!pendingScrollTarget || tab !== pendingScrollTarget) return;
+    const targetRef = pendingScrollTarget === 'profile' ? examTargetRef : bindSectionRef;
+    window.requestAnimationFrame(() => {
+      targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setHighlightTarget(pendingScrollTarget);
+      window.setTimeout(() => setHighlightTarget(null), 1400);
+    });
+    setPendingScrollTarget(null);
+  }, [pendingScrollTarget, tab]);
+
+  function scrollToStudentSection(target: 'binding' | 'profile') {
+    setTab(target);
+    setPendingScrollTarget(target);
+  }
+
   return (
     <>
-      <StudentDashboard user={user} stats={stats} profile={profile} messages={messages} bindStatus={bindStatus} onSetProfile={() => setTab('profile')} onOpenMessages={() => setTab('messages')} onOpenBinding={() => setTab('binding')} />
+      <StudentDashboard user={user} stats={stats} profile={profile} messages={messages} bindStatus={bindStatus} onSetProfile={() => scrollToStudentSection('profile')} onOpenMessages={() => setTab('messages')} onOpenBinding={() => scrollToStudentSection('binding')} />
       <TabBar
         items={[
           ['plan', '今日计划', ClipboardList],
@@ -682,8 +702,16 @@ function StudentApp({ user }: { user: User }) {
       {tab === 'week' && <WeekPlanPage user={user} profile={profile} onGenerated={async (startDate) => { setDate(startDate); setTab('plan'); setNotice('未来 7 天学习计划已生成'); await refresh(); }} />}
       {tab === 'checkin' && <CheckinPage user={user} date={date} setDate={setDate} tasks={tasks} stats={stats} onRefresh={refresh} />}
       {tab === 'messages' && <MessageListPage user={user} messages={messages} onRefresh={refresh} />}
-      {tab === 'binding' && <StudentBindingPage user={user} bindStatus={bindStatus} onRefresh={refresh} />}
-      {tab === 'profile' && <ProfilePage user={user} profile={profile} onSaved={refresh} />}
+      {tab === 'binding' && (
+        <div ref={bindSectionRef} className={`scroll-mt-24 rounded-lg transition-all duration-300 ${highlightTarget === 'binding' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
+          <StudentBindingPage user={user} bindStatus={bindStatus} onRefresh={refresh} />
+        </div>
+      )}
+      {tab === 'profile' && (
+        <div ref={examTargetRef} className={`scroll-mt-24 rounded-lg transition-all duration-300 ${highlightTarget === 'profile' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
+          <ProfilePage user={user} profile={profile} onSaved={refresh} />
+        </div>
+      )}
       {tab === 'history' && <HistoryPage checkins={checkins} user={user} />}
     </>
   );
