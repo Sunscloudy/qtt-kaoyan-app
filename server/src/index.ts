@@ -40,12 +40,12 @@ type Subject = 'english' | 'politics' | 'major1' | 'major2';
 type Priority = 'high' | 'medium' | 'low';
 type Role = 'student' | 'supervisor';
 type TaskStatus = 'not_started' | 'in_progress' | 'completed';
-type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply';
+type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply' | 'student_note';
 
 const subjects: Subject[] = ['english', 'politics', 'major1', 'major2'];
 const priorities: Priority[] = ['high', 'medium', 'low'];
 const taskStatuses: TaskStatus[] = ['not_started', 'in_progress', 'completed'];
-const messageTypes: MessageType[] = ['encouragement', 'reminder', 'review', 'reply'];
+const messageTypes: MessageType[] = ['encouragement', 'reminder', 'review', 'reply', 'student_note'];
 
 const subjectLabels: Record<Subject, string> = {
   english: '英语',
@@ -95,9 +95,10 @@ const messageTypeLabels: Record<MessageType, string> = {
   encouragement: '鼓励',
   reminder: '提醒',
   review: '复盘',
-  reply: '回复'
+  reply: '回复',
+  student_note: '学生留言'
 };
-const moodStickers = new Set(['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', ]);
+const moodStickers = new Set(['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了']);
 
 type AuthedRequest = Request & { userId?: number; userRole?: Role };
 type AsyncHandler = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<unknown>;
@@ -214,8 +215,15 @@ async function getProfilePayload(userId: number) {
 }
 
 async function getMessagesForStudent(userId: number) {
+  const supervisor = await getBoundSupervisorForStudent(userId);
+  if (!supervisor) return [];
   const messages = await prisma.message.findMany({
-    where: { OR: [{ receiverId: userId }, { senderId: userId }] },
+    where: {
+      OR: [
+        { senderId: userId, receiverId: supervisor.id },
+        { senderId: supervisor.id, receiverId: userId }
+      ]
+    },
     include: {
       sender: { select: { id: true, username: true, nickname: true, role: true } },
       receiver: { select: { id: true, username: true, nickname: true, role: true } }
@@ -372,6 +380,14 @@ async function getBoundStudentForSupervisor(supervisorId: number, studentId?: nu
     orderBy: { createdAt: 'asc' }
   });
   return pair?.student ?? null;
+}
+
+async function getBoundSupervisorForStudent(studentId: number) {
+  const pair = await prisma.studyPair.findUnique({
+    where: { studentId },
+    include: { supervisor: { select: { id: true, username: true, nickname: true, role: true } } }
+  });
+  return pair?.supervisor ?? null;
 }
 
 async function getMessageThreadRoot(messageId: number) {
@@ -645,6 +661,35 @@ app.get('/api/messages', requireUser, requireRole('student'), asyncHandler(async
   res.json(await getMessagesForStudent(req.userId!));
 }));
 
+app.post('/api/messages', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
+  const content = String(req.body.content || '').trim();
+  if (!content) return res.status(400).json({ message: '留言内容不能为空' });
+
+  const supervisor = await getBoundSupervisorForStudent(req.userId!);
+  if (!supervisor) return res.status(400).json({ message: '绑定监督者后，就可以给他留言啦。' });
+
+  const message = await prisma.message.create({
+    data: {
+      senderId: req.userId!,
+      receiverId: supervisor.id,
+      content,
+      type: 'student_note'
+    },
+    include: {
+      sender: { select: { id: true, username: true, nickname: true, role: true } },
+      receiver: { select: { id: true, username: true, nickname: true, role: true } }
+    }
+  });
+
+  res.status(201).json({
+    ...message,
+    typeLabel: messageTypeLabels.student_note,
+    senderName: message.sender.nickname || message.sender.username,
+    receiverName: message.receiver.nickname || message.receiver.username,
+    senderRole: message.sender.role
+  });
+}));
+
 app.post('/api/bind-code', requireUser, requireRole('student'), asyncHandler(async (req: AuthedRequest, res) => {
   const existingPair = await prisma.studyPair.findUnique({
     where: { studentId: req.userId! },
@@ -705,6 +750,8 @@ app.put('/api/messages/:id/read', requireUser, requireRole('student'), asyncHand
 
   const message = await prisma.message.findFirst({ where: { id, receiverId: req.userId! } });
   if (!message) return res.status(404).json({ message: '留言不存在' });
+  const isBound = await isSupervisorBoundToStudent(message.senderId, req.userId!);
+  if (!isBound) return res.status(403).json({ message: '只能标记已绑定监督者发来的留言' });
 
   const updated = await prisma.message.update({ where: { id }, data: { isRead: true } });
   res.json(updated);

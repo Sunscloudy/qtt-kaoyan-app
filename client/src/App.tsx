@@ -28,7 +28,7 @@ type Role = 'student' | 'supervisor';
 type Subject = 'english' | 'politics' | 'major1' | 'major2';
 type Priority = 'high' | 'medium' | 'low';
 type TaskStatus = 'not_started' | 'in_progress' | 'completed';
-type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply';
+type MessageType = 'encouragement' | 'reminder' | 'review' | 'reply' | 'student_note';
 
 type User = {
   id: number;
@@ -171,10 +171,11 @@ const messageTypeLabels: Record<MessageType, string> = {
   encouragement: '鼓励',
   reminder: '提醒',
   review: '复盘',
-  reply: '回复'
+  reply: '回复',
+  student_note: '学生留言'
 };
-const newMessageTypes: Array<Exclude<MessageType, 'reply'>> = ['encouragement', 'reminder', 'review'];
-const moodStickerOptions = ['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', ];
+const newMessageTypes: Array<Exclude<MessageType, 'reply' | 'student_note'>> = ['encouragement', 'reminder', 'review'];
+const moodStickerOptions = ['🙂 还不错', '😵 有点累', '🔥 状态很好', '🥺 想摆烂', '💪 但我坚持了'];
 const titleMilestones = [
   { days: 1, title: '今天开始选手' },
   { days: 3, title: '小小坚持家' },
@@ -347,7 +348,7 @@ function MobileInstallPrompt() {
   if (online && !showInstallTip) return null;
 
   return (
-    <div className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg border border-tea/15 bg-white/95 p-4 text-sm text-slate-600 shadow-soft backdrop-blur">
+    <div className="soft-notice fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md border border-tea/15 bg-white/95 p-4 text-sm text-slate-600 shadow-soft backdrop-blur">
       {!online && (
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-700">
           当前网络不可用，打卡和同步需要联网后继续。
@@ -422,7 +423,7 @@ function LoginPage({ onLogin, onRegister }: { onLogin: (user: User) => void; onR
   }
 
   return (
-    <main className="min-h-screen px-5 py-8">
+    <main className="auth-page min-h-screen px-5 py-8">
       <div className="mx-auto flex min-h-[calc(100vh-64px)] max-w-5xl items-center">
         <section className="grid w-full gap-6 md:grid-cols-[1.1fr_0.9fr]">
           <div className="flex flex-col justify-center">
@@ -435,7 +436,7 @@ function LoginPage({ onLogin, onRegister }: { onLogin: (user: User) => void; onR
             </p>
           </div>
 
-          <form onSubmit={submit} className="card p-6">
+          <form onSubmit={submit} className="card auth-card p-6">
             <div className="mb-6">
               <h2 className="text-2xl font-black">登录</h2>
             </div>
@@ -506,7 +507,7 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
   }
 
   return (
-    <main className="min-h-screen px-5 py-8">
+    <main className="auth-page min-h-screen px-5 py-8">
       <div className="mx-auto flex min-h-[calc(100vh-64px)] max-w-5xl items-center">
         <section className="grid w-full gap-6 md:grid-cols-[1fr_1fr]">
           <div className="flex flex-col justify-center">
@@ -518,7 +519,7 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
               学生注册后可以生成绑定码，监督者输入绑定码后，才能看到对应学生的打卡和留言状态。
             </p>
           </div>
-          <form onSubmit={submit} className="card p-6">
+          <form onSubmit={submit} className="card auth-card p-6">
             <div className="mb-6">
               <h2 className="text-2xl font-black">注册</h2>
               <p className="mt-2 text-sm text-slate-500">学生账号可以直接注册；监督者账号需要内码，用于保护学习记录隐私。</p>
@@ -568,7 +569,7 @@ function RegisterPage({ onLogin, onLoginPage }: { onLogin: (user: User) => void;
 
 function Shell({ user, onLogout, children }: { user: User; onLogout: () => void; children: React.ReactNode }) {
   return (
-    <main className="mx-auto min-h-screen max-w-7xl px-4 py-5 md:px-8">
+    <main className="app-shell mx-auto min-h-screen max-w-7xl px-4 py-5 md:px-8">
       <header className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
           <p className="text-sm font-bold text-tea">坚持不是一下子做到很多，而是每天都继续</p>
@@ -695,24 +696,26 @@ function StudentApp({ user }: { user: User }) {
         value={tab}
         onChange={(value) => setTab(value as typeof tab)}
       />
-      {error && <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
-      {notice && <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{notice}</p>}
+      {error && <ErrorNotice message={error} />}
+      {notice && <SuccessNotice message={notice} />}
       {loading && <LoadingNotice />}
-      {tab === 'plan' && <PlanPage user={user} date={date} setDate={setDate} tasks={tasks} onRefresh={refresh} onTaskStatusChange={updateTaskStatusLocal} onStatsRefresh={refreshStatsOnly} />}
-      {tab === 'week' && <WeekPlanPage user={user} profile={profile} onGenerated={async (startDate) => { setDate(startDate); setTab('plan'); setNotice('未来 7 天学习计划已生成'); await refresh(); }} />}
-      {tab === 'checkin' && <CheckinPage user={user} date={date} setDate={setDate} tasks={tasks} stats={stats} onRefresh={refresh} />}
-      {tab === 'messages' && <MessageListPage user={user} messages={messages} onRefresh={refresh} />}
-      {tab === 'binding' && (
-        <div ref={bindSectionRef} className={`scroll-mt-24 rounded-lg transition-all duration-300 ${highlightTarget === 'binding' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
-          <StudentBindingPage user={user} bindStatus={bindStatus} onRefresh={refresh} />
-        </div>
-      )}
-      {tab === 'profile' && (
-        <div ref={examTargetRef} className={`scroll-mt-24 rounded-lg transition-all duration-300 ${highlightTarget === 'profile' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
-          <ProfilePage user={user} profile={profile} onSaved={refresh} />
-        </div>
-      )}
-      {tab === 'history' && <HistoryPage checkins={checkins} user={user} />}
+      <div className="page-panel">
+        {tab === 'plan' && <PlanPage user={user} date={date} setDate={setDate} tasks={tasks} onRefresh={refresh} onTaskStatusChange={updateTaskStatusLocal} onStatsRefresh={refreshStatsOnly} />}
+        {tab === 'week' && <WeekPlanPage user={user} profile={profile} onGenerated={async (startDate) => { setDate(startDate); setTab('plan'); setNotice('未来 7 天学习计划已生成'); await refresh(); }} />}
+        {tab === 'checkin' && <CheckinPage user={user} date={date} setDate={setDate} tasks={tasks} stats={stats} onRefresh={refresh} />}
+        {tab === 'messages' && <MessageListPage user={user} messages={messages} bindStatus={bindStatus} onRefresh={refresh} />}
+        {tab === 'binding' && (
+          <div ref={bindSectionRef} className={`scroll-mt-24 rounded-3xl transition-all duration-300 ${highlightTarget === 'binding' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
+            <StudentBindingPage user={user} bindStatus={bindStatus} onRefresh={refresh} />
+          </div>
+        )}
+        {tab === 'profile' && (
+          <div ref={examTargetRef} className={`scroll-mt-24 rounded-3xl transition-all duration-300 ${highlightTarget === 'profile' ? 'ring-4 ring-tea/25 bg-emerald-50/30' : ''}`}>
+            <ProfilePage user={user} profile={profile} onSaved={refresh} />
+          </div>
+        )}
+        {tab === 'history' && <HistoryPage checkins={checkins} user={user} />}
+      </div>
     </>
   );
 }
@@ -1086,10 +1089,42 @@ function WeekPlanPage({ user, profile, onGenerated }: { user: User; profile: Pro
   );
 }
 
-function MessageListPage({ user, messages, onRefresh }: { user: User; messages: StudyMessage[]; onRefresh: () => Promise<void> }) {
+function MessageListPage({ user, messages, bindStatus, onRefresh }: { user: User; messages: StudyMessage[]; bindStatus: BindStatus | null; onRefresh: () => Promise<void> }) {
+  const [content, setContent] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [saving, setSaving] = useState(false);
   const threads = useMemo(() => groupMessageThreads(messages), [messages]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const nextContent = content.trim();
+    if (!bindStatus?.bound) {
+      setError('绑定监督者后，就可以给他留言啦。');
+      return;
+    }
+    if (!nextContent) {
+      setError('留言内容不能为空');
+      return;
+    }
+    setError('');
+    setNotice('');
+    setSaving(true);
+    try {
+      await api('/messages', {
+        method: 'POST',
+        headers: authHeaders(user),
+        body: JSON.stringify({ content: nextContent, type: 'student_note' })
+      });
+      setContent('');
+      await onRefresh();
+      setNotice('留言已发送，他打开 App 就能看到。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发送留言失败');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function markRead(message: StudyMessage) {
     setError('');
@@ -1112,37 +1147,60 @@ function MessageListPage({ user, messages, onRefresh }: { user: User; messages: 
   }, [messages.map((message) => `${message.id}:${message.isRead}`).join(','), user.id]);
 
   return (
-    <section className="card p-5">
-      <h2 className="mb-2 text-2xl font-black">留言</h2>
-      <p className="mb-5 text-sm text-slate-500">你不是一个人在坚持。</p>
-      {error && <ErrorNotice message={error} />}
-      {notice && <SuccessNotice message={notice} />}
-      <div className="space-y-3">
-        {threads.map(({ root, replies }) => (
-          <MessageThreadCard
-            key={root.id}
-            root={root}
-            replies={replies}
-            replyEndpoint={`/messages/${root.id}/reply`}
-            user={user}
-            onRefresh={onRefresh}
-            onError={setError}
-            onNotice={setNotice}
-            extraAction={!root.isRead && root.receiverId === user.id ? <button className="btn btn-ghost h-9 min-h-9" onClick={() => markRead(root)}><Check size={16} /> 标记已读</button> : null}
+    <section className="grid gap-5 lg:grid-cols-[360px_1fr]">
+      <form onSubmit={submit} className="card h-fit p-5">
+        <h2 className="mb-2 text-2xl font-black">给监督者留言</h2>
+        <p className="mb-5 text-sm leading-6 text-slate-500">
+          {bindStatus?.bound
+            ? `会发送给：${bindStatus.supervisor?.nickname || bindStatus.supervisor?.username}`
+            : '绑定监督者后，就可以给他留言啦。'}
+        </p>
+        {error && <ErrorNotice message={error} />}
+        {notice && <SuccessNotice message={notice} />}
+        <label className="mb-4 block">
+          <span className="mb-2 block text-sm font-bold text-slate-600">留言内容</span>
+          <textarea
+            className="field min-h-32"
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            placeholder="今天有点累，但还是学完了。"
+            disabled={!bindStatus?.bound || saving}
           />
-        ))}
-        {!threads.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
-      </div>
+        </label>
+        <button className="btn btn-primary w-full" disabled={!bindStatus?.bound || saving || !content.trim()}>
+          <Mail size={18} /> {saving ? '发送中' : '发送留言'}
+        </button>
+      </form>
+      <section className="card p-5">
+        <h2 className="mb-2 text-2xl font-black">留言</h2>
+        <p className="mb-5 text-sm text-slate-500">你不是一个人在坚持。</p>
+        <div className="space-y-3">
+          {threads.map(({ root, replies }) => (
+            <MessageThreadCard
+              key={root.id}
+              root={root}
+              replies={replies}
+              replyEndpoint={`/messages/${root.id}/reply`}
+              user={user}
+              onRefresh={onRefresh}
+              onError={setError}
+              onNotice={setNotice}
+              extraAction={!root.isRead && root.receiverId === user.id ? <button className="btn btn-ghost h-9 min-h-9" onClick={() => markRead(root)}><Check size={16} /> 标记已读</button> : null}
+            />
+          ))}
+          {!threads.length && <p className="rounded-lg bg-white p-5 text-sm text-slate-500">还没有留言。</p>}
+        </div>
+      </section>
     </section>
   );
 }
 
 function MessageBubble({ message, user, nested = false }: { message: StudyMessage; user: User; nested?: boolean }) {
-  const roleLabel = message.senderRole === 'student' ? '学生' : '监督者';
   const isOwnMessage = message.senderId === user.id;
+  const roleLabel = isOwnMessage ? '我' : message.senderRole === 'student' ? '学生' : '监督者';
   const readLabel = isOwnMessage ? '已发送' : message.isRead ? '已读' : '未读';
   return (
-    <div className={`rounded-lg bg-white p-4 ${nested ? 'ml-4 border-l-4 border-rosepaper' : ''}`}>
+    <div className={`message-bubble rounded-2xl bg-white/78 p-4 shadow-sm ${nested ? 'ml-4 border-l-4 border-rosepaper' : ''}`}>
       <div className="mb-2 flex flex-wrap gap-2">
         <span className={`pill ${message.senderRole === 'student' ? 'bg-emerald-50 text-emerald-700' : 'bg-rosepaper text-slate-600'}`}>{roleLabel}</span>
         <span className="pill bg-slate-100 text-slate-600">{message.senderName || roleLabel}</span>
@@ -1203,7 +1261,7 @@ function MessageThreadCard({
   }
 
   return (
-    <article className="rounded-lg bg-white/70 p-3">
+    <article className="message-bubble rounded-2xl bg-white/60 p-3 shadow-sm">
       <MessageBubble message={root} user={user} />
       {extraAction && <div className="mt-2">{extraAction}</div>}
       <div className="mt-3 space-y-2">
@@ -1326,14 +1384,14 @@ function PlanPage({
                 {grouped[key].map((task) => {
                   const isUpdating = updatingTaskIds.has(task.id);
                   return (
-                  <article key={task.id} className={`card p-4 transition ${isUpdating ? 'ring-2 ring-tea/20' : ''}`}>
+                  <article key={task.id} className={`card task-card p-4 transition ${task.status === 'completed' ? 'task-card-completed' : ''} ${isUpdating ? 'ring-2 ring-tea/20' : ''}`}>
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <button className="flex min-w-0 items-start gap-3 text-left" onClick={() => toggleTask(task)} title="切换完成状态">
-                        <span className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${task.status === 'completed' ? 'border-tea bg-tea text-white' : 'border-slate-300 bg-white'}`}>
+	                        <span className={`check-mark mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border ${task.status === 'completed' ? 'border-tea bg-tea text-white' : 'border-slate-300 bg-white'}`}>
                           {task.status === 'completed' && <Check size={16} />}
                         </span>
                         <span>
-                          <span className="block font-black">{task.title}</span>
+	                          <span className="task-title block font-black">{task.title}</span>
                           <span className="mt-1 block text-sm leading-6 text-slate-500">{task.description || '还没有描述'}</span>
                         </span>
                       </button>
@@ -1522,7 +1580,7 @@ function CheckinPage({
         })
       });
       await onRefresh();
-      setNotice('今日小红花已送达 🌹 你今天也认真得很可爱。');
+      setNotice('今天的努力已经被认真记录啦。今日小红花已送达 🌹');
     } catch (err) {
       setError(err instanceof Error ? err.message : '提交打卡失败');
     } finally {
@@ -1696,11 +1754,13 @@ function SupervisorApp({ user }: { user: User }) {
       />
       {loading && <LoadingNotice />}
       {error && <ErrorNotice message={error} />}
-      {tab === 'dashboard' && dashboard && <SupervisorDashboard user={user} dashboard={dashboard} onOpenBinding={() => setTab('binding')} />}
-      {tab === 'binding' && <SupervisorBindingPage user={user} students={students} onRefresh={async () => { await refresh(); setTab('dashboard'); }} />}
-      {tab === 'history' && <SupervisorHistory user={user} checkins={checkins} />}
-      {tab === 'stats' && stats && <StatsPage stats={stats} />}
-      {tab === 'messages' && <SupervisorMessagesPage user={user} messages={messages} onRefresh={refresh} />}
+      <div className="page-panel">
+        {tab === 'dashboard' && dashboard && <SupervisorDashboard user={user} dashboard={dashboard} onOpenBinding={() => setTab('binding')} />}
+        {tab === 'binding' && <SupervisorBindingPage user={user} students={students} onRefresh={async () => { await refresh(); setTab('dashboard'); }} />}
+        {tab === 'history' && <SupervisorHistory user={user} checkins={checkins} />}
+        {tab === 'stats' && stats && <StatsPage stats={stats} />}
+        {tab === 'messages' && <SupervisorMessagesPage user={user} messages={messages} onRefresh={refresh} />}
+      </div>
     </>
   );
 }
@@ -2048,7 +2108,7 @@ function CheckinDetail({ detail, compact = false }: { detail: DailyCheckin | nul
 
 function Metric({ title, value }: { title: string; value: string }) {
   return (
-    <div className="card p-4">
+    <div className="card metric-card p-4">
       <p className="text-sm font-bold text-slate-500">{title}</p>
       <p className="mt-2 text-2xl font-black text-ink">{value}</p>
     </div>
@@ -2056,15 +2116,15 @@ function Metric({ title, value }: { title: string; value: string }) {
 }
 
 function LoadingNotice() {
-  return <p className="mb-4 rounded-lg bg-white/80 px-3 py-2 text-sm font-bold text-slate-500">加载中...</p>;
+  return <p className="soft-notice mb-4 bg-white/80 px-4 py-3 text-sm font-bold text-slate-500">加载中...</p>;
 }
 
 function ErrorNotice({ message }: { message: string }) {
-  return <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{message}</p>;
+  return <p className="soft-notice mb-4 bg-rose-50/90 px-4 py-3 text-sm font-bold text-rose-700">{message || '操作没有成功，请稍后再试。'}</p>;
 }
 
 function SuccessNotice({ message }: { message: string }) {
-  return <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">{message}</p>;
+  return <p className="soft-notice mb-4 bg-emerald-50/90 px-4 py-3 text-sm font-bold text-emerald-700">{message}</p>;
 }
 
 function TabBar<T extends string>({
@@ -2077,9 +2137,9 @@ function TabBar<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <nav className="mb-5 flex flex-wrap gap-2">
+    <nav className="tabbar mb-5 flex flex-wrap gap-2">
       {items.map(([key, label, Icon]) => (
-        <button key={key} className={`btn ${value === key ? 'btn-primary' : 'btn-ghost'}`} onClick={() => onChange(key)}>
+        <button key={key} className={`btn tabbar-button ${value === key ? 'btn-primary' : 'btn-ghost'}`} onClick={() => onChange(key)}>
           <Icon size={18} /> {label}
         </button>
       ))}
