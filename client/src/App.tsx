@@ -410,7 +410,7 @@ function LoginPage({ onLogin, onRegister }: { onLogin: (user: User) => void; onR
             </p>
             <h1 className="text-4xl font-black leading-tight text-ink md:text-5xl">今天也在靠近目标</h1>
             <p className="mt-5 max-w-xl text-lg leading-8 text-slate-600">
-              给法学考研准备的一方小桌面：安排任务、完成打卡、留下复盘，也让关心你的人看见每一天的认真。
+              给全世界最可爱的人准备的一方小桌面：看见你每一天认真。
             </p>
           </div>
 
